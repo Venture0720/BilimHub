@@ -31,15 +31,13 @@ router.get('/', ...requireRole('super_admin', 'center_admin'), async (req, res, 
 // ── POST /api/centers ─────────────────────────────────────────────────────────
 router.post('/', ...requireRole('super_admin'), async (req, res, next) => {
   try {
-    const { name, plan = 'basic' } = req.body;
+    const { name } = req.body;
     if (!name) return res.status(400).json({ error: 'Center name required' });
-    const validPlans = ['basic', 'professional', 'enterprise'];
-    if (!validPlans.includes(plan)) return res.status(400).json({ error: 'Invalid plan' });
 
     let code;
     do { code = genCode(); } while (await db.get(`SELECT id FROM centers WHERE code = ?`, [code]));
 
-    const result = await db.run(`INSERT INTO centers (name, code, plan) VALUES (?,?,?) RETURNING id`, [name.trim(), code, plan]);
+    const result = await db.run(`INSERT INTO centers (name, code) VALUES (?,?) RETURNING id`, [name.trim(), code]);
     res.status(201).json(await db.get(`SELECT * FROM centers WHERE id = ?`, [result.lastInsertRowid]));
   } catch (err) { next(err); }
 });
@@ -55,7 +53,7 @@ router.patch('/:id', ...requireRole('super_admin', 'center_admin'), async (req, 
     if (!center) return res.status(404).json({ error: 'Center not found' });
 
     const allowed = req.user.role === 'super_admin'
-      ? ['name', 'plan', 'is_active']
+      ? ['name', 'is_active']
       : ['name'];
 
     const updates = {};

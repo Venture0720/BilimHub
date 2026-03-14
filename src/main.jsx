@@ -647,19 +647,17 @@ function SuperDash() {
         {label:'Центров',value:activeCenters,sub:`Всего: ${data?.length||0}`,icon:'🏫',color:'hsl(160,50%,40%)'},
         {label:'Учеников',value:totalStudents,sub:'Активных',icon:'🎓',color:'#10b981'},
         {label:'Учителей',value:totalTeachers,sub:'Активных',icon:'👨‍🏫',color:'#f59e0b'},
-        {label:'Тариф',value:'Multi',sub:'Платформа активна',icon:'⚡',color:'hsl(180,45%,45%)'},
       ]}/>
       <div className="card">
         <div className="ch"><div className="ct">Зарегистрированные центры</div></div>
         <div className="cb" style={{padding:'0 0 0'}}>
           <table className="tbl">
-            <thead><tr><th>Центр</th><th>Код</th><th>Тариф</th><th>Учеников</th><th>Учителей</th><th>Статус</th></tr></thead>
+            <thead><tr><th>Центр</th><th>Код</th><th>Учеников</th><th>Учителей</th><th>Статус</th></tr></thead>
             <tbody>
               {(data||[]).map(c=>(
                 <tr key={c.id}>
                   <td style={{fontWeight:600}}>{c.name}</td>
                   <td><span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:'var(--muted)'}}>{c.code}</span></td>
-                  <td><span className={`bdg ${c.plan==='enterprise'?'bp':c.plan==='professional'?'bb':'bk'}`}>{c.plan}</span></td>
                   <td>{c.student_count||0}</td>
                   <td>{c.teacher_count||0}</td>
                   <td><span className={`bdg ${c.is_active?'bg':'br'}`}>{c.is_active?'Активен':'Неактивен'}</span></td>
@@ -677,7 +675,7 @@ function SuperDash() {
 function CentersView() {
   const { data: centers, loading, reload } = useApi(() => API.get('/api/centers'));
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({ name:'', plan:'basic' });
+  const [form, setForm] = useState({ name:'' });
   const [err, setErr] = useState('');
   const [saving, setSaving] = useState(false);
   const [editId, setEditId] = useState(null);
@@ -700,7 +698,7 @@ function CentersView() {
     e.preventDefault(); setErr(''); setSaving(true);
     try {
       const created = await API.post('/api/centers', form);
-      reload(); setShowCreate(false); setForm({name:'',plan:'basic'});
+      reload(); setShowCreate(false); setForm({name:''});
       // After creating, prompt to create first admin
       setNewCenter(created);
     } catch(ex) { setErr(ex.message); }
@@ -767,13 +765,12 @@ function CentersView() {
       <div className="card">
         <div className="cb" style={{padding:0}}>
           <table className="tbl">
-            <thead><tr><th>Название</th><th>Код</th><th>Тариф</th><th>Учеников</th><th>Учителей</th><th>Создан</th><th>Статус</th><th style={{width:140}}>Действия</th></tr></thead>
+            <thead><tr><th>Название</th><th>Код</th><th>Учеников</th><th>Учителей</th><th>Создан</th><th>Статус</th><th style={{width:140}}>Действия</th></tr></thead>
             <tbody>
               {(centers||[]).map(c=>(
                 <tr key={c.id}>
                   <td style={{fontWeight:700}}>{c.name}</td>
                   <td><span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:'var(--muted)',background:'#f3f4f6',padding:'2px 6px',borderRadius:4}}>{c.code}</span></td>
-                  <td><span className={`bdg ${c.plan==='enterprise'?'bp':c.plan==='professional'?'bb':'bk'}`}>{c.plan}</span></td>
                   <td style={{fontWeight:600}}>{c.student_count||0}</td>
                   <td style={{fontWeight:600}}>{c.teacher_count||0}</td>
                   <td style={{fontSize:11,color:'var(--muted)'}}>{fmtDate(c.created_at)}</td>
@@ -781,7 +778,7 @@ function CentersView() {
                   <td>
                     <div style={{display:'flex',gap:5}}>
                       <button className="btn btn-s btn-sm" title="Создать инвайт-токен" onClick={()=>{setInviteCenter(c);setInviteRole('center_admin');setInviteLabel('');setInviteResult(null);setInviteErr('');}}>🔑</button>
-                      <button className="btn btn-s btn-sm" title="Редактировать" onClick={()=>{setEditId(c.id);setEditForm({name:c.name,plan:c.plan});setEditErr('');}}>✏️</button>
+                      <button className="btn btn-s btn-sm" title="Редактировать" onClick={()=>{setEditId(c.id);setEditForm({name:c.name});setEditErr('');}}>✏️</button>
                       <button className={`btn btn-sm ${c.is_active?'btn-d':'btn-g'}`} onClick={()=>toggleActive(c)}>
                         {c.is_active?'Откл.':'Вкл.'}
                       </button>
@@ -789,7 +786,7 @@ function CentersView() {
                   </td>
                 </tr>
               ))}
-              {!centers?.length && <tr><td colSpan={8}><div className="empty"><div className="empty-ico">🏫</div>Нет центров</div></td></tr>}
+              {!centers?.length && <tr><td colSpan={7}><div className="empty"><div className="empty-ico">🏫</div>Нет центров</div></td></tr>}
             </tbody>
           </table>
         </div>
@@ -801,13 +798,6 @@ function CentersView() {
           <form onSubmit={create}>
             <div className="fg"><label className="fl">Название центра</label>
               <input className="fi" required value={form.name} onChange={set('name')} placeholder="Astana Excellence Academy"/>
-            </div>
-            <div className="fg"><label className="fl">Тариф</label>
-              <select className="fi" value={form.plan} onChange={set('plan')}>
-                <option value="basic">Basic</option>
-                <option value="professional">Professional</option>
-                <option value="enterprise">Enterprise</option>
-              </select>
             </div>
             <div style={{background:'var(--primary-light)',borderRadius:8,padding:'10px 12px',fontSize:12,color:'var(--primary)',marginBottom:14}}>
               ℹ️ Уникальный код центра будет сгенерирован автоматически
@@ -850,13 +840,6 @@ function CentersView() {
             <div className="fg"><label className="fl">Название</label>
               <input className="fi" required value={editForm.name||''} onChange={e=>setEditForm(p=>({...p,name:e.target.value}))} />
             </div>
-            <div className="fg"><label className="fl">Тариф</label>
-              <select className="fi" value={editForm.plan||'basic'} onChange={e=>setEditForm(p=>({...p,plan:e.target.value}))}>
-                <option value="basic">Basic</option>
-                <option value="professional">Professional</option>
-                <option value="enterprise">Enterprise</option>
-              </select>
-            </div>
             <div style={{display:'flex',gap:8}}>
               <button type="submit" className="btn btn-p" style={{flex:1}}>Сохранить</button>
               <button type="button" className="btn btn-s" onClick={()=>setEditId(null)}>Отмена</button>
@@ -873,7 +856,7 @@ function CentersView() {
               <Alert msg={inviteErr}/>
               <div style={{background:'var(--surface2)',borderRadius:8,padding:'10px 13px',marginBottom:14,border:'1px solid var(--border)'}}>
                 <div style={{fontSize:12,fontWeight:600}}>{inviteCenter.name}</div>
-                <div style={{fontSize:11,color:'var(--muted)'}}>Код: {inviteCenter.code} · Тариф: {inviteCenter.plan}</div>
+                <div style={{fontSize:11,color:'var(--muted)'}}>Код: {inviteCenter.code}</div>
               </div>
               <form onSubmit={createInvite}>
                 <div className="fg"><label className="fl">Роль</label>
@@ -944,7 +927,6 @@ function CenterDash({ user, center }) {
           <div className="pt">{center?.name || 'Центр'}</div>
           <div className="ps" style={{display:'flex',alignItems:'center',gap:8,marginTop:5}}>
             <span style={{fontFamily:"'JetBrains Mono',monospace",background:'#f3f4f6',padding:'2px 7px',borderRadius:4,fontSize:11}}>{center?.code}</span>
-            <span style={{background:'linear-gradient(135deg,hsl(160,50%,40%),hsl(180,45%,45%))',color:'#fff',padding:'2px 8px',borderRadius:20,fontSize:10,fontWeight:700}}>⚡ {center?.plan}</span>
           </div>
         </div>
       </div>
