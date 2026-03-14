@@ -19,7 +19,7 @@ router.get('/', authenticate, async (req, res, next) => {
 // ── GET /api/notifications/unread-count ──────────────────────────────────────
 router.get('/unread-count', authenticate, async (req, res, next) => {
   try {
-    const row = await db.get(`SELECT COUNT(*) AS count FROM notifications WHERE user_id = ? AND is_read = 0`, [req.user.id]);
+    const row = await db.get(`SELECT COUNT(*)::int AS count FROM notifications WHERE user_id = ? AND is_read = 0`, [req.user.id]);
     res.json({ count: row.count });
   } catch (err) { next(err); }
 });
@@ -53,3 +53,4 @@ router.delete('/:id', authenticate, async (req, res, next) => {
 });
 
 module.exports = router;
+

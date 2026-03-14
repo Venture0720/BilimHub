@@ -39,7 +39,7 @@ router.post('/', ...requireRole('center_admin', 'super_admin'), async (req, res,
       if (!student) return res.status(404).json({ error: 'Student not found in this center' });
     }
 
-    const token = crypto.randomBytes(16).toString('hex');
+    const token = crypto.randomBytes(16).toString('hex').toUpperCase();
     const expiresAt = new Date(Date.now() + (Math.min(parseInt(expiresInDays) || 7, 90)) * 86400000).toISOString();
 
     const result = await db.run(`

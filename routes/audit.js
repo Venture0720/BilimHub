@@ -53,14 +53,14 @@ router.get('/stats', ...requireRole('center_admin', 'super_admin'), async (req, 
     params.push(cutoff.toISOString());
 
     const stats = await db.all(`
-      SELECT al.action, COUNT(*) AS count
+      SELECT al.action, COUNT(*)::int AS count
       FROM audit_logs al
       WHERE al.created_at > ? ${filter ? filter.replace('AND', 'AND') : ''}
       GROUP BY al.action ORDER BY count DESC LIMIT 20
     `, role === 'center_admin' ? [center_id, cutoff.toISOString()] : [cutoff.toISOString()]);
 
     const totalRow = await db.get(`
-      SELECT COUNT(*) AS total FROM audit_logs al
+      SELECT COUNT(*)::int AS total FROM audit_logs al
       WHERE al.created_at > ? ${filter}
     `, role === 'center_admin' ? [cutoff.toISOString(), center_id] : [cutoff.toISOString()]);
 
@@ -69,3 +69,4 @@ router.get('/stats', ...requireRole('center_admin', 'super_admin'), async (req, 
 });
 
 module.exports = router;
+

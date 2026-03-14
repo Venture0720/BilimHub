@@ -16,8 +16,8 @@ router.get('/', ...requireRole('super_admin', 'center_admin'), async (req, res, 
     if (req.user.role === 'super_admin') {
       const centers = await db.all(`
         SELECT c.*,
-          (SELECT COUNT(*) FROM users WHERE center_id = c.id AND role = 'student' AND is_active = 1) AS student_count,
-          (SELECT COUNT(*) FROM users WHERE center_id = c.id AND role = 'teacher' AND is_active = 1) AS teacher_count
+          (SELECT COUNT(*)::int FROM users WHERE center_id = c.id AND role = 'student' AND is_active = 1) AS student_count,
+          (SELECT COUNT(*)::int FROM users WHERE center_id = c.id AND role = 'teacher' AND is_active = 1) AS teacher_count
         FROM centers c ORDER BY c.created_at DESC
       `);
       res.json(centers);
@@ -76,19 +76,19 @@ router.get('/stats', ...requireRole('super_admin', 'center_admin'), async (req, 
     if (!centerId) return res.status(400).json({ error: 'centerId required' });
 
     const stats = {
-      students: (await db.get(`SELECT COUNT(*) AS n FROM users WHERE center_id=? AND role='student' AND is_active=1`, [centerId])).n,
-      teachers: (await db.get(`SELECT COUNT(*) AS n FROM users WHERE center_id=? AND role='teacher' AND is_active=1`, [centerId])).n,
-      classes:  (await db.get(`SELECT COUNT(*) AS n FROM classes WHERE center_id=? AND is_active=1`, [centerId])).n,
-      assignments: (await db.get(`SELECT COUNT(*) AS n FROM assignments WHERE center_id=?`, [centerId])).n,
-      pendingSubmissions: (await db.get(`
-        SELECT COUNT(*) AS n FROM submissions s
+      students: Number((await db.get(`SELECT COUNT(*)::int AS n FROM users WHERE center_id=? AND role='student' AND is_active=1`, [centerId])).n),
+      teachers: Number((await db.get(`SELECT COUNT(*)::int AS n FROM users WHERE center_id=? AND role='teacher' AND is_active=1`, [centerId])).n),
+      classes:  Number((await db.get(`SELECT COUNT(*)::int AS n FROM classes WHERE center_id=? AND is_active=1`, [centerId])).n),
+      assignments: Number((await db.get(`SELECT COUNT(*)::int AS n FROM assignments WHERE center_id=?`, [centerId])).n),
+      pendingSubmissions: Number((await db.get(`
+        SELECT COUNT(*)::int AS n FROM submissions s
         JOIN assignments a ON s.assignment_id = a.id
         WHERE a.center_id = ? AND s.status = 'submitted'
-      `, [centerId])).n,
-      activeTokens: (await db.get(`
-        SELECT COUNT(*) AS n FROM invite_tokens
+      `, [centerId])).n),
+      activeTokens: Number((await db.get(`
+        SELECT COUNT(*)::int AS n FROM invite_tokens
         WHERE center_id = ? AND used_by IS NULL AND expires_at > NOW()
-      `, [centerId])).n,
+      `, [centerId])).n),
     };
     res.json(stats);
   } catch (err) { next(err); }

@@ -124,7 +124,7 @@ router.get('/stats', authenticate, async (req, res, next) => {
     if (role === 'student') {
       const stats = await db.all(`
         SELECT c.id AS class_id, c.name AS class_name, c.color,
-          COUNT(*) AS total,
+          COUNT(*)::int AS total,
           COUNT(CASE WHEN att.status = 'present' THEN 1 END) AS present,
           COUNT(CASE WHEN att.status = 'absent' THEN 1 END) AS absent,
           COUNT(CASE WHEN att.status = 'late' THEN 1 END) AS late,
@@ -143,7 +143,7 @@ router.get('/stats', authenticate, async (req, res, next) => {
 
     let q = `
       SELECT u.id AS student_id, u.name AS student_name,
-        COUNT(*) AS total,
+        COUNT(*)::int AS total,
         COUNT(CASE WHEN att.status = 'present' THEN 1 END) AS present,
         COUNT(CASE WHEN att.status = 'absent' THEN 1 END) AS absent,
         COUNT(CASE WHEN att.status = 'late' THEN 1 END) AS late,
@@ -160,3 +160,4 @@ router.get('/stats', authenticate, async (req, res, next) => {
 });
 
 module.exports = router;
+
