@@ -1,0 +1,33 @@
+{
+  "recommendations": [
+    // GitHub Copilot — AI pair programmer with Claude support
+    "GitHub.copilot",
+    "GitHub.copilot-chat",
+
+    // Code quality
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+
+    // Node / JS
+    "christian-kohler.npm-intellisense",
+    "eg2.vscode-npm-script",
+
+    // REST API testing (чтобы тестировать API прямо в VS Code)
+    "humao.rest-client",
+
+    // Database viewer (открыть edu.db визуально)
+    "qwtel.sqlite-viewer",
+
+    // .env файлы
+    "mikestead.dotenv",
+
+    // Better git integration
+    "eamodio.gitlens",
+
+    // File icons
+    "pkief.material-icon-theme",
+
+    // Highlight TODO comments
+    "gruntfuggly.todo-tree"
+  ]
+}

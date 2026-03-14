@@ -1,0 +1,2882 @@
+import React, { useState, useEffect, useCallback, useRef, createContext, useContext } from 'react';
+import ReactDOM from 'react-dom/client';
+import './styles.css';
+import { isNative, initNativeBridge } from './lib/platform';
+import { MobileAppWrapper } from './lib/MobileAppWrapper';
+
+// Initialize native bridge when running in Capacitor
+initNativeBridge();
+
+// ── Toast Context ─────────────────────────────────────────────────────────────
+const ToastContext = createContext(null);
+function useToast() { return useContext(ToastContext); }
+function ToastProvider({ children }) {
+  const [toasts, setToasts] = useState([]);
+  const idRef = useRef(0);
+  function showToast(message, type = 'info') {
+    const id = ++idRef.current;
+    setToasts(t => [...t, { id, message, type }]);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 4000);
+  }
+  return (
+    <ToastContext.Provider value={showToast}>
+      {children}
+      <div className="toast-container">
+        {toasts.map(t => (
+          <div key={t.id} className={`toast toast-${t.type}`}>
+            <span>{t.type==='success'?'✅':t.type==='error'?'❌':t.type==='warning'?'⚠️':'ℹ️'}</span>
+            <span>{t.message}</span>
+          </div>
+        ))}
+      </div>
+    </ToastContext.Provider>
+  );
+}
+
+// ── Confirm Dialog ────────────────────────────────────────────────────────────
+const ConfirmContext = createContext(null);
+function useConfirm() { return useContext(ConfirmContext); }
+function ConfirmProvider({ children }) {
+  const [state, setState] = useState(null);
+  function showConfirm(message, title = 'Подтверждение', options = {}) {
+    return new Promise(resolve => {
+      setState({ message, title, resolve, ...options });
+    });
+  }
+  function handleResponse(val) { state?.resolve(val); setState(null); }
+  return (
+    <ConfirmContext.Provider value={showConfirm}>
+      {children}
+      {state && (
+        <div className="overlay" onClick={() => handleResponse(false)} style={{animation:'fadeIn 0.15s ease'}}>
+          <div className="modal" style={{maxWidth:420,animation:'slideUp 0.2s ease'}} onClick={e=>e.stopPropagation()}>
+            {state.icon && <div className="confirm-icon">{state.icon}</div>}
+            <div className="modal-t" style={{textAlign:state.icon?'center':'left'}}>{state.title}</div>
+            <div className="confirm-message">{state.message}</div>
+            <div className="confirm-actions">
+              <button className={`btn ${state.danger?'btn-d':'btn-p'}`} style={{flex:1}} onClick={() => handleResponse(true)}>
+                {state.confirmText || 'Да'}
+              </button>
+              <button className="btn btn-s" style={{flex:1}} onClick={() => handleResponse(false)}>
+                {state.cancelText || 'Отмена'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      <style>{`
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+      `}</style>
+    </ConfirmContext.Provider>
+  );
+}
+
+// ── Grading Utils ─────────────────────────────────────────────────────────────
+function getGradeColor(score, scale = '10-point') {
+  if (scale === '10-point') {
+    if (score >= 9) return '#10b981';
+    if (score >= 7) return '#3b82f6';
+    if (score >= 5) return '#f59e0b';
+    if (score >= 3) return '#ef4444';
+    return '#991b1b';
+  }
+  if (scale === '100-point') {
+    if (score >= 85) return '#10b981';
+    if (score >= 70) return '#3b82f6';
+    if (score >= 50) return '#f59e0b';
+    if (score >= 30) return '#ef4444';
+    return '#991b1b';
+  }
+  return '#6b7280';
+}
+
+function getGradeIcon(score, scale = '10-point') {
+  if (scale === '10-point') {
+    if (score === 10) return '🏆';
+    if (score >= 9) return '⭐';
+    if (score >= 7) return '✨';
+    if (score >= 5) return '👍';
+    if (score >= 3) return '📝';
+    return '😢';
+  }
+  if (scale === '100-point') {
+    if (score >= 95) return '🏆';
+    if (score >= 85) return '⭐';
+    if (score >= 70) return '✨';
+    if (score >= 50) return '👍';
+    if (score >= 30) return '📝';
+    return '😢';
+  }
+  return '❓';
+}
+
+function getGradeLabel(score, scale = '10-point') {
+  if (scale === '10-point') {
+    if (score >= 9) return 'Отлично';
+    if (score >= 7) return 'Хорошо';
+    if (score >= 5) return 'Удовлетворительно';
+    if (score >= 3) return 'Неудовлетворительно';
+    return 'Плохо';
+  }
+  if (scale === '100-point') {
+    if (score >= 85) return 'Отлично';
+    if (score >= 70) return 'Хорошо';
+    if (score >= 50) return 'Удовлетворительно';
+    if (score >= 30) return 'Неудовлетворительно';
+    return 'Плохо';
+  }
+  return 'Не оценено';
+}
+
+function generateStars(score, maxScore = 10) {
+  if (maxScore !== 10) return null;
+  const filled = Math.floor(score);
+  const empty = maxScore - filled;
+  return '⭐'.repeat(filled) + '☆'.repeat(empty);
+}
+
+// ── API layer ─────────────────────────────────────────────────────────────────
+import { API_BASE } from './lib/platform';
+
+const API = (() => {
+  let _accessToken = null;  // kept in memory only — not localStorage
+  let _user = JSON.parse(localStorage.getItem('user') || 'null');
+  let _onUnauth = null;
+
+  function setToken(t) { _accessToken = t; }
+  function setUser(u) { _user = u; localStorage.setItem('user', JSON.stringify(u)); }
+  function getUser() { return _user; }
+  function getToken() { return _accessToken; }
+  function onUnauth(fn) { _onUnauth = fn; }
+
+  async function req(method, url, body, isForm = false) {
+    const headers = { Authorization: `Bearer ${_accessToken}` };
+    if (!isForm) headers['Content-Type'] = 'application/json';
+
+    const fullUrl = url.startsWith('http') ? url : API_BASE + url;
+    const res = await fetch(fullUrl, {
+      method, headers,
+      credentials: 'include',
+      body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
+    });
+
+    if (res.status === 401) {
+      const errData = await res.json().catch(() => ({}));
+      if (errData.code === 'TOKEN_EXPIRED' || errData.error === 'No token provided' || errData.error === 'Invalid token') {
+        // Try refresh
+        const rr = await fetch(API_BASE + '/api/auth/refresh', { method: 'POST', credentials: 'include' });
+        if (rr.ok) {
+          const { accessToken, user } = await rr.json();
+          setToken(accessToken); setUser(user);
+          // Retry
+          return req(method, url, body, isForm);
+        } else {
+          setToken(null); setUser(null);
+          if (_onUnauth) _onUnauth();
+          throw new Error('Session expired');
+        }
+      }
+      throw new Error(errData.error || 'Unauthorized');
+    }
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+    return data;
+  }
+
+  return {
+    setToken, setUser, getUser, getToken, onUnauth,
+    get: (url) => req('GET', url),
+    post: (url, body) => req('POST', url, body),
+    postForm: (url, fd) => req('POST', url, fd, true),
+    patch: (url, body) => req('PATCH', url, body),
+    del: (url) => req('DELETE', url),
+    login: async (username, password) => {
+      const d = await fetch(API_BASE + '/api/auth/login', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await d.json();
+      if (!d.ok) throw new Error(data.error || 'Ошибка входа');
+      setToken(data.accessToken); setUser(data.user);
+      return data;
+    },
+    register: async (name, email, password, inviteToken) => {
+      const d = await fetch(API_BASE + '/api/auth/register', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, password, inviteToken }),
+      });
+      const data = await d.json();
+      if (!d.ok) throw new Error(data.error || 'Registration failed');
+      setToken(data.accessToken); setUser(data.user);
+      return data;
+    },
+    logout: async () => {
+      await fetch(API_BASE + '/api/auth/logout', { method: 'POST', credentials: 'include', headers: { Authorization: `Bearer ${_accessToken}` } }).catch(() => {});
+      setToken(null); setUser(null);
+    },
+    tryRestoreSession: async () => {
+      const savedUserId = _user?.id;
+      // If we have a token in memory, try /me; otherwise try refresh
+      if (_accessToken) {
+        try {
+          const data = await req('GET', '/api/auth/me');
+          if (savedUserId && data.user && savedUserId !== data.user.id) {
+            setToken(null); setUser(null);
+            return null;
+          }
+          return data;
+        } catch { return null; }
+      }
+      // No token in memory — try silent refresh via httpOnly cookie
+      try {
+        const rr = await fetch(API_BASE + '/api/auth/refresh', { method: 'POST', credentials: 'include' });
+        if (rr.ok) {
+          const { accessToken, user } = await rr.json();
+          setToken(accessToken); setUser(user);
+          if (savedUserId && user && savedUserId !== user.id) {
+            setToken(null); setUser(null);
+            return null;
+          }
+          return { user, center: null };  // center will be fetched separately
+        }
+      } catch {}
+      setToken(null); setUser(null);
+      return null;
+    },
+  };
+})();
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+const gColor = p => p >= 90 ? '#059669' : p >= 80 ? 'hsl(160,50%,40%)' : p >= 65 ? '#d97706' : p >= 50 ? '#dc2626' : '#9ca3af';
+const gBg = p => p >= 90 ? '#ecfdf5' : p >= 80 ? 'hsl(160,40%,92%)' : p >= 65 ? '#fffbeb' : p >= 50 ? '#fef2f2' : '#f3f4f6';
+const typeIco = t => ({ homework:'📚', test:'📋', essay:'✍️', lab:'🔬', project:'🏗️' })[t] || '📄';
+const typeBg = t => ({ homework:'#fffbeb', test:'#eef2ff', essay:'#fdf2f8', lab:'#ecfdf5', project:'#eff6ff' })[t] || '#f3f4f6';
+const roleLabel = { super_admin:'Суперадмин', center_admin:'Директор', teacher:'Учитель', student:'Ученик', parent:'Родитель' };
+const rolePlural = { super_admin:'Суперадмины', center_admin:'Директора', teacher:'Учителя', student:'Ученики', parent:'Родители' };
+const avaColor = r => ({ super_admin:'hsl(180,45%,45%)', center_admin:'hsl(160,50%,40%)', teacher:'#0d9488', student:'#f59e0b', parent:'#ec4899' })[r] || '#6b7280';
+const fmtDate = d => d ? new Date(d).toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric'}) : '—';
+const initials = n => n ? n.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase() : '??';
+function relativeDate(d) {
+  if (!d) return '—';
+  const now = new Date(); now.setHours(0,0,0,0);
+  const target = new Date(d); target.setHours(0,0,0,0);
+  const diff = Math.round((target - now) / 86400000);
+  const abs = Math.abs(diff);
+  const formatted = fmtDate(d);
+  if (diff === 0) return 'Сегодня';
+  if (diff === 1) return 'Завтра';
+  if (diff === -1) return 'Вчера';
+  if (diff > 1 && diff <= 7) return `Через ${abs} дн. (${formatted})`;
+  if (diff < -1 && diff >= -7) return `Просрочено ${abs} дн.`;
+  return 'До ' + formatted;
+}
+
+const EMPTY_DEPS = [];
+function useApi(fn, deps) {
+  const effectiveDeps = deps || EMPTY_DEPS;
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const load = useCallback(async () => {
+    setLoading(true); setError(null);
+    try { setData(await fn()); } catch(e) { setError(e.message); }
+    setLoading(false);
+  }, effectiveDeps);
+  useEffect(() => { load(); }, [load]);
+  return { data, loading, error, reload: load };
+}
+
+// ── Components ─────────────────────────────────────────────────────────────────
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+  static getDerivedStateFromError(error) { return { hasError: true, error }; }
+  componentDidCatch(error, info) { console.error('[ErrorBoundary]', error, info); }
+  render() {
+    if (this.state.hasError) {
+      return React.createElement('div', { style: { padding: 40, textAlign: 'center' } },
+        React.createElement('div', { style: { fontSize: 36, marginBottom: 12 } }, '⚠️'),
+        React.createElement('div', { style: { fontWeight: 700, fontSize: 16, marginBottom: 8 } }, 'Что-то пошло не так'),
+        React.createElement('div', { style: { fontSize: 13, color: 'var(--muted)', marginBottom: 16 } }, String(this.state.error?.message || '')),
+        React.createElement('button', { className: 'btn btn-p', onClick: () => this.setState({ hasError: false, error: null }) }, 'Попробовать снова')
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function Spinner() { return <div style={{textAlign:'center',padding:'40px',color:'var(--muted)',fontSize:13}}>Загрузка...</div>; }
+
+function Alert({ msg }) { return msg ? <div className="err-box">{msg}</div> : null; }
+
+function Modal({ title, onClose, children }) {
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="modal fade" onClick={e=>e.stopPropagation()}>
+        <div className="modal-t">{title}</div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function StatGrid({ stats }) {
+  return (
+    <div className="sg">
+      {stats.map(s => (
+        <div className="sc" key={s.label}>
+          <div className="sl">{s.label}</div>
+          <div className="sv" style={{color:s.color}}>{s.value}</div>
+          <div className="ss">{s.sub}</div>
+          <div className="si">{s.icon}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── LANDING PAGE ──────────────────────────────────────────────────────────────
+function LandingPage({ onGetStarted, onLogin }) {
+  useEffect(() => {
+    // Simple fade-in animations without framer-motion
+    const observer = new IntersectionObserver(
+      entries => entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.style.opacity = '1';
+          entry.target.style.transform = 'translateY(0)';
+        }
+      }),
+      { threshold: 0.1 }
+    );
+    document.querySelectorAll('.animate-on-scroll').forEach(el => {
+      el.style.opacity = '0';
+      el.style.transform = 'translateY(20px)';
+      el.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+      observer.observe(el);
+    });
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div className="landing">
+      {/* Navbar */}
+      <nav className="landing-nav" style={{opacity:0,animation:'fadeDown 0.5s ease forwards'}}>
+        <div className="landing-logo">
+          <div className="landing-logo-icon">B</div>
+          <span>BilimHub</span>
+        </div>
+        <div className="landing-nav-links">
+          <a href="#features" className="landing-nav-link">Возможности</a>
+          <a href="#benefits" className="landing-nav-link">Преимущества</a>
+          <a href="#" className="landing-nav-link" onClick={e=>{e.preventDefault();alert('Контакт: info@bilimhub.kz')}}>Контакты</a>
+        </div>
+        <div className="landing-nav-cta">
+          <button className="btn btn-s" onClick={onLogin}>Вход</button>
+          <button className="btn btn-p" onClick={onGetStarted}>Начать</button>
+        </div>
+      </nav>
+
+      {/* Hero Section */}
+      <section className="landing-hero">
+        <div className="landing-orb"></div>
+        <div style={{position:'relative',zIndex:1}}>
+          <div className="landing-badge" style={{opacity:0,animation:'fadeUp 0.6s ease 0.1s forwards'}}>
+            ✨ Современная платформа для образовательных центров
+          </div>
+          <h1 className="landing-h1" style={{opacity:0,animation:'fadeUp 0.6s ease 0.2s forwards'}}>
+            Управляйте вашим центром <span className="landing-gradient">легко и эффективно</span>
+          </h1>
+          <p className="landing-desc" style={{opacity:0,animation:'fadeUp 0.6s ease 0.3s forwards'}}>
+            BilimHub — комплексное решение для автоматизации образовательных центров. Журнал оценок, расписание, задания и многое другое в одной платформе.
+          </p>
+          <div className="landing-cta-group" style={{opacity:0,animation:'fadeUp 0.6s ease 0.4s forwards'}}>
+            <button className="landing-cta-btn landing-cta-primary" onClick={onGetStarted}>
+              Начать бесплатно →
+            </button>
+            <button className="landing-cta-btn landing-cta-secondary" onClick={()=>alert('Демо: используйте учетные данные на странице входа')}>
+              Посмотреть демо
+            </button>
+          </div>
+          <div className="landing-preview" style={{opacity:0,animation:'fadeUp 0.8s ease 0.5s forwards'}}>
+            <div style={{padding:'40px',background:'linear-gradient(135deg,hsl(160,50%,40%),hsl(180,45%,45%))',color:'#fff',textAlign:'center',fontSize:'18px',fontWeight:600}}>
+              📊 Интерфейс панели управления
+            </div>
+          </div>
+          <div className="landing-stats" style={{opacity:0,animation:'fadeUp 0.8s ease 0.7s forwards'}}>
+            <div className="landing-stat">
+              <div className="landing-stat-value">99.9%</div>
+              <div className="landing-stat-label">Uptime</div>
+            </div>
+            <div className="landing-stat">
+              <div className="landing-stat-value">50+</div>
+              <div className="landing-stat-label">Центров</div>
+            </div>
+            <div className="landing-stat">
+              <div className="landing-stat-value">10K+</div>
+              <div className="landing-stat-label">Учеников</div>
+            </div>
+            <div className="landing-stat">
+              <div className="landing-stat-value">24/7</div>
+              <div className="landing-stat-label">Поддержка</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Features Section */}
+      <section className="landing-features" id="features">
+        <div className="animate-on-scroll">
+          <h2 className="landing-section-title">Все необходимое в одном месте</h2>
+          <p className="landing-section-desc">
+            Мощные инструменты для управления учебным процессом, построенные для современных образовательных центров.
+          </p>
+        </div>
+        <div className="landing-features-grid">
+          {[
+            { icon: '📚', title: 'Журнал оценок', desc: 'Полный контроль успеваемости. Оценки, комментарии, аналитика по каждому ученику.' },
+            { icon: '🗓', title: 'Расписание', desc: 'Автоматическое расписание занятий с уведомлениями для учителей и учеников.' },
+            { icon: '📋', title: 'Задания и тесты', desc: 'Создавайте задания, принимайте работы онлайн, проверяйте и оценивайте.' },
+            { icon: '👥', title: 'Управление пользователями', desc: 'Роли и права доступа: администраторы, учителя, ученики, родители.' },
+            { icon: '✅', title: 'Посещаемость', desc: 'Отслеживайте посещаемость занятий. Автоматические отчеты и уведомления.' },
+            { icon: '📊', title: 'Аналитика и отчёты', desc: 'Детальные отчеты по успеваемости, посещаемости и активности центра.' },
+          ].map((f, i) => (
+            <div key={i} className="landing-feature-card animate-on-scroll" style={{animationDelay:`${0.8+i*0.08}s`}}>
+              <div className="landing-feature-icon">{f.icon}</div>
+              <h3 className="landing-feature-title">{f.title}</h3>
+              <p className="landing-feature-desc">{f.desc}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* CTA Section */}
+      <section className="landing-cta-section animate-on-scroll" id="benefits">
+        <h2>Готовы начать?</h2>
+        <p>Присоединяйтесь к сотням образовательных центров, которые уже используют BilimHub</p>
+        <button className="landing-cta-btn" onClick={onGetStarted}>
+          Создать аккаунт →
+        </button>
+      </section>
+
+      {/* Footer */}
+      <footer className="landing-footer">
+        <div className="landing-footer-logo">BilimHub</div>
+        <div className="landing-footer-text">© 2026 BilimHub. SaaS Platform for Educational Centers.</div>
+      </footer>
+
+      <style>{`
+        @keyframes fadeDown {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes fadeUp {
+          from { opacity: 0; transform: translateY(20px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// ── AUTH SCREENS ───────────────────────────────────────────────────────────────
+function AuthPage({ onLogin, onBack }) {
+  const [mode, setMode] = useState('login'); // login | register
+  const [form, setForm] = useState({ name:'', username:'', email:'', password:'', inviteToken:'' });
+  const [err, setErr] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [tokenInfo, setTokenInfo] = useState(null);
+
+  const set = k => e => setForm(p=>({...p,[k]:e.target.value}));
+
+  async function checkToken(token) {
+    if (token.length < 10) return;
+    try {
+      const info = await fetch(API_BASE + `/api/tokens/validate/${token.toUpperCase()}`).then(r=>r.json());
+      if (info.error) setTokenInfo({ error: info.error });
+      else setTokenInfo(info);
+    } catch { setTokenInfo(null); }
+  }
+
+  async function submit(e) {
+    e.preventDefault(); setErr(''); setLoading(true);
+    try {
+      if (mode === 'login') {
+        await API.login(form.username, form.password); // Используем username вместо email
+      } else {
+        await API.register(form.name, form.email, form.password, form.inviteToken);
+      }
+      onLogin(API.getUser());
+    } catch(ex) { setErr(ex.message); }
+    setLoading(false);
+  }
+
+  return (
+    <div className="auth-bg">
+      <div className="auth-card">
+        <div className="auth-logo">
+          <div className="auth-logo-icon">B</div>
+          <div>
+            <div className="auth-logo-text">BilimHub</div>
+            <div className="auth-logo-sub">SaaS Platform for Education</div>
+          </div>
+        </div>
+        <div className="auth-h">{mode==='login' ? 'Добро пожаловать' : 'Регистрация'}</div>
+        <div className="auth-sub">{mode==='login' ? 'Войдите в свой аккаунт' : 'Введите инвайт-код от вашего центра'}</div>
+        <Alert msg={err} />
+        <form onSubmit={submit}>
+          {mode==='register' && (
+            <>
+              <div className="fg">
+                <label className="fl">Полное имя</label>
+                <input className="fi" value={form.name} onChange={set('name')} placeholder="Иванов Иван Иванович" required />
+              </div>
+              <div className="fg">
+                <label className="fl">Инвайт-токен</label>
+                <input className="fi" value={form.inviteToken} onChange={e=>{set('inviteToken')(e);checkToken(e.target.value)}}
+                  placeholder="STD-AEA2847-XXXXX" style={{fontFamily:"'JetBrains Mono',monospace"}} required />
+                {tokenInfo && !tokenInfo.error && (
+                  <div style={{background:'var(--green-s)',border:'1px solid #6ee7b7',borderRadius:6,padding:'6px 10px',marginTop:5,fontSize:11,color:'#059669'}}>
+                    ✅ {tokenInfo.centerName} · Роль: {roleLabel[tokenInfo.role]}
+                    {tokenInfo.label && ` · ${tokenInfo.label}`}
+                  </div>
+                )}
+                {tokenInfo?.error && <div style={{color:'var(--red)',fontSize:11,marginTop:4}}>❌ {tokenInfo.error}</div>}
+              </div>
+            </>
+          )}
+          {mode==='register' && (
+            <div className="fg">
+              <label className="fl">Email (опционально)</label>
+              <input className="fi" type="email" value={form.email} onChange={set('email')} placeholder="ivan@example.com (не обязательно)" />
+              <div style={{fontSize:10,color:'var(--muted)',marginTop:4}}>Email нужен только для уведомлений (если захотите)</div>
+            </div>
+          )}
+          {mode==='login' && (
+            <div className="fg">
+              <label className="fl">Логин</label>
+              <input className="fi" value={form.username} onChange={set('username')} placeholder="ivan123" required autoComplete="username" />
+            </div>
+          )}
+          <div className="fg">
+            <label className="fl">Пароль</label>
+            <input className="fi" type="password" value={form.password} onChange={set('password')} placeholder="Минимум 8 символов" required minLength={8} />
+            {mode==='login' && <div style={{textAlign:'right',marginTop:4}}>
+              <span style={{fontSize:11,color:'var(--accent)',cursor:'pointer'}} onClick={()=>alert('Обратитесь к администратору вашего центра для сброса пароля.\n\nКонтакт: admin@ваш-центр.kz')}>Забыли пароль?</span>
+            </div>}
+          </div>
+          <button className="btn btn-p" style={{width:'100%',justifyContent:'center',padding:'10px',fontSize:14,marginTop:6}} disabled={loading}>
+            {loading ? '...' : (mode==='login' ? 'Войти' : 'Зарегистрироваться')}
+          </button>
+        </form>
+        <div style={{textAlign:'center',marginTop:16,fontSize:12,color:'var(--muted)'}}>
+          {mode==='login'
+            ? <span>Нет аккаунта? <span style={{color:'var(--accent)',cursor:'pointer',fontWeight:600}} onClick={()=>{setMode('register');setErr('')}}>Регистрация</span></span>
+            : <span>Уже есть аккаунт? <span style={{color:'var(--accent)',cursor:'pointer',fontWeight:600}} onClick={()=>{setMode('login');setErr('')}}>Войти</span></span>
+          }
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── NAVIGATION CONFIGS ────────────────────────────────────────────────────────
+const NAV = {
+  super_admin: [
+    {id:'dashboard',label:'Обзор платформы',ico:'🏠',sec:'Главное'},
+    {id:'centers',label:'Центры',ico:'🏫',sec:'Управление'},
+    {id:'users_all',label:'Все пользователи',ico:'👥',sec:'Управление'},
+    {id:'audit',label:'Журнал действий',ico:'📝',sec:'Управление'},
+    {id:'notifications',label:'Уведомления',ico:'🔔',sec:'Аккаунт'},
+    {id:'profile',label:'Профиль',ico:'👤',sec:'Аккаунт'},
+  ],
+  center_admin: [
+    {id:'dashboard',label:'Дашборд',ico:'🏠',sec:'Главное'},
+    {id:'tokens',label:'Токены',ico:'🔑',sec:'Пользователи'},
+    {id:'users',label:'Пользователи',ico:'👥',sec:'Пользователи'},
+    {id:'classes',label:'Классы',ico:'📚',sec:'Учёба'},
+    {id:'schedule',label:'Расписание',ico:'🗓',sec:'Учёба'},
+    {id:'assignments',label:'Задания',ico:'📋',sec:'Учёба'},
+    {id:'gradebook',label:'Журнал оценок',ico:'📊',sec:'Учёба'},
+    {id:'attendance',label:'Посещаемость',ico:'✅',sec:'Учёба'},
+    {id:'audit',label:'Журнал действий',ico:'📝',sec:'Управление'},
+    {id:'notifications',label:'Уведомления',ico:'🔔',sec:'Аккаунт'},
+    {id:'profile',label:'Профиль',ico:'👤',sec:'Аккаунт'},
+  ],
+  teacher: [
+    {id:'dashboard',label:'Кабинет',ico:'🏠',sec:'Главное'},
+    {id:'classes',label:'Мои классы',ico:'📚',sec:'Учёба'},
+    {id:'schedule',label:'Расписание',ico:'🗓',sec:'Учёба'},
+    {id:'assignments',label:'Задания',ico:'📋',sec:'Учёба'},
+    {id:'gradebook',label:'Журнал оценок',ico:'📊',sec:'Учёба'},
+    {id:'attendance',label:'Посещаемость',ico:'✅',sec:'Учёба'},
+    {id:'notifications',label:'Уведомления',ico:'🔔',sec:'Аккаунт'},
+    {id:'profile',label:'Профиль',ico:'👤',sec:'Аккаунт'},
+  ],
+  student: [
+    {id:'dashboard',label:'Главная',ico:'🏠',sec:'Обзор'},
+    {id:'schedule',label:'Расписание',ico:'🗓',sec:'Учёба'},
+    {id:'assignments',label:'Задания',ico:'📋',sec:'Учёба'},
+    {id:'grades',label:'Мои оценки',ico:'📊',sec:'Учёба'},
+    {id:'classes',label:'Мои классы',ico:'📚',sec:'Учёба'},
+    {id:'attendance',label:'Посещаемость',ico:'✅',sec:'Учёба'},
+    {id:'notifications',label:'Уведомления',ico:'🔔',sec:'Аккаунт'},
+    {id:'profile',label:'Профиль',ico:'👤',sec:'Аккаунт'},
+  ],
+  parent: [
+    {id:'dashboard',label:'Главная',ico:'🏠',sec:'Обзор'},
+    {id:'schedule',label:'Расписание',ico:'🗓',sec:'Ребёнок'},
+    {id:'grades',label:'Успеваемость',ico:'📊',sec:'Ребёнок'},
+    {id:'assignments',label:'Задания',ico:'📋',sec:'Ребёнок'},
+    {id:'attendance',label:'Посещаемость',ico:'✅',sec:'Ребёнок'},
+    {id:'notifications',label:'Уведомления',ico:'🔔',sec:'Аккаунт'},
+    {id:'profile',label:'Профиль',ico:'👤',sec:'Аккаунт'},
+  ],
+};
+
+// ── VIEWS ─────────────────────────────────────────────────────────────────────
+
+// ·· SUPER ADMIN DASHBOARD
+function SuperDash() {
+  const { data, loading } = useApi(() => API.get('/api/centers'));
+  if (loading) return <Spinner/>;
+  const totalStudents = data?.reduce((s,c)=>s+(c.student_count||0),0)||0;
+  const totalTeachers = data?.reduce((s,c)=>s+(c.teacher_count||0),0)||0;
+  const activeCenters = data?.filter(c=>c.is_active).length||0;
+  return (
+    <div className="fade">
+      <div className="ph"><div className="pt">Платформа BilimHub</div><div className="ps">Сводка по всем центрам</div></div>
+      <StatGrid stats={[
+        {label:'Центров',value:activeCenters,sub:`Всего: ${data?.length||0}`,icon:'🏫',color:'hsl(160,50%,40%)'},
+        {label:'Учеников',value:totalStudents,sub:'Активных',icon:'🎓',color:'#10b981'},
+        {label:'Учителей',value:totalTeachers,sub:'Активных',icon:'👨‍🏫',color:'#f59e0b'},
+        {label:'Тариф',value:'Multi',sub:'Платформа активна',icon:'⚡',color:'hsl(180,45%,45%)'},
+      ]}/>
+      <div className="card">
+        <div className="ch"><div className="ct">Зарегистрированные центры</div></div>
+        <div className="cb" style={{padding:'0 0 0'}}>
+          <table className="tbl">
+            <thead><tr><th>Центр</th><th>Код</th><th>Тариф</th><th>Учеников</th><th>Учителей</th><th>Статус</th></tr></thead>
+            <tbody>
+              {(data||[]).map(c=>(
+                <tr key={c.id}>
+                  <td style={{fontWeight:600}}>{c.name}</td>
+                  <td><span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:'var(--muted)'}}>{c.code}</span></td>
+                  <td><span className={`bdg ${c.plan==='enterprise'?'bp':c.plan==='professional'?'bb':'bk'}`}>{c.plan}</span></td>
+                  <td>{c.student_count||0}</td>
+                  <td>{c.teacher_count||0}</td>
+                  <td><span className={`bdg ${c.is_active?'bg':'br'}`}>{c.is_active?'Активен':'Неактивен'}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ·· SUPER ADMIN — CENTERS MANAGEMENT
+function CentersView() {
+  const { data: centers, loading, reload } = useApi(() => API.get('/api/centers'));
+  const [showCreate, setShowCreate] = useState(false);
+  const [form, setForm] = useState({ name:'', plan:'basic' });
+  const [err, setErr] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [editErr, setEditErr] = useState('');
+  // Invite token generation
+  const [inviteCenter, setInviteCenter] = useState(null); // center object to create invite for
+  const [inviteRole, setInviteRole] = useState('center_admin');
+  const [inviteLabel, setInviteLabel] = useState('');
+  const [inviteResult, setInviteResult] = useState(null);
+  const [inviteErr, setInviteErr] = useState('');
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+  // New center result (show token creation prompt)
+  const [newCenter, setNewCenter] = useState(null);
+
+  const set = k => e => setForm(p=>({...p,[k]:e.target.value}));
+
+  async function create(e) {
+    e.preventDefault(); setErr(''); setSaving(true);
+    try {
+      const created = await API.post('/api/centers', form);
+      reload(); setShowCreate(false); setForm({name:'',plan:'basic'});
+      // After creating, prompt to create first admin
+      setNewCenter(created);
+    } catch(ex) { setErr(ex.message); }
+    setSaving(false);
+  }
+
+  async function toggleActive(c) {
+    try { await API.patch(`/api/centers/${c.id}`, { is_active: c.is_active ? 0 : 1 }); reload(); }
+    catch(ex) { alert(ex.message); }
+  }
+
+  async function saveEdit(e) {
+    e.preventDefault(); setEditErr('');
+    try {
+      await API.patch(`/api/centers/${editId}`, editForm);
+      reload(); setEditId(null);
+    } catch(ex) { setEditErr(ex.message); }
+  }
+
+  async function createInvite(e) {
+    e.preventDefault(); setInviteErr(''); setInviteLoading(true);
+    try {
+      const result = await API.post(`/api/tokens?centerId=${inviteCenter.id}`, {
+        role: inviteRole,
+        label: inviteLabel || `${roleLabel[inviteRole]} для ${inviteCenter.name}`,
+        expiresInDays: 0,
+        centerId: inviteCenter.id,
+      });
+      setInviteResult(result);
+    } catch(ex) { setInviteErr(ex.message); }
+    setInviteLoading(false);
+  }
+
+  function closeInvite() {
+    setInviteCenter(null); setInviteResult(null); setInviteErr('');
+    setInviteRole('center_admin'); setInviteLabel(''); setCopied(false);
+  }
+
+  function copyToken(token) {
+    navigator.clipboard?.writeText(token).catch(()=>{});
+    setCopied(true); setTimeout(()=>setCopied(false), 2000);
+  }
+
+  if (loading) return <Spinner/>;
+
+  return (
+    <div className="fade">
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+        <div>
+          <div className="pt">Управление центрами</div>
+          <div className="ps">{centers?.length||0} центров в системе</div>
+        </div>
+        <button className="btn btn-p" onClick={()=>setShowCreate(true)}>🏫 Создать центр</button>
+      </div>
+
+      {/* How it works hint */}
+      <div className="card" style={{padding:'14px 18px',marginBottom:16,background:'var(--primary-light)',border:'1px solid hsl(160,40%,85%)'}}>
+        <div style={{fontWeight:700,fontSize:13,color:'var(--primary)',marginBottom:6}}>📋 Как подключить центр?</div>
+        <div style={{fontSize:12,color:'var(--text)',lineHeight:1.6}}>
+          <b>1.</b> Создайте центр → <b>2.</b> Нажмите 🔑 чтобы создать инвайт-токен для администратора центра → <b>3.</b> Отправьте токен директору → <b>4.</b> Директор регистрируется по токену на странице входа → <b>5.</b> Он получает доступ к панели управления центра
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="cb" style={{padding:0}}>
+          <table className="tbl">
+            <thead><tr><th>Название</th><th>Код</th><th>Тариф</th><th>Учеников</th><th>Учителей</th><th>Создан</th><th>Статус</th><th style={{width:140}}>Действия</th></tr></thead>
+            <tbody>
+              {(centers||[]).map(c=>(
+                <tr key={c.id}>
+                  <td style={{fontWeight:700}}>{c.name}</td>
+                  <td><span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:'var(--muted)',background:'#f3f4f6',padding:'2px 6px',borderRadius:4}}>{c.code}</span></td>
+                  <td><span className={`bdg ${c.plan==='enterprise'?'bp':c.plan==='professional'?'bb':'bk'}`}>{c.plan}</span></td>
+                  <td style={{fontWeight:600}}>{c.student_count||0}</td>
+                  <td style={{fontWeight:600}}>{c.teacher_count||0}</td>
+                  <td style={{fontSize:11,color:'var(--muted)'}}>{fmtDate(c.created_at)}</td>
+                  <td><span className={`bdg ${c.is_active?'bg':'br'}`}>{c.is_active?'Активен':'Неактивен'}</span></td>
+                  <td>
+                    <div style={{display:'flex',gap:5}}>
+                      <button className="btn btn-s btn-sm" title="Создать инвайт-токен" onClick={()=>{setInviteCenter(c);setInviteRole('center_admin');setInviteLabel('');setInviteResult(null);setInviteErr('');}}>🔑</button>
+                      <button className="btn btn-s btn-sm" title="Редактировать" onClick={()=>{setEditId(c.id);setEditForm({name:c.name,plan:c.plan});setEditErr('');}}>✏️</button>
+                      <button className={`btn btn-sm ${c.is_active?'btn-d':'btn-g'}`} onClick={()=>toggleActive(c)}>
+                        {c.is_active?'Откл.':'Вкл.'}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {!centers?.length && <tr><td colSpan={8}><div className="empty"><div className="empty-ico">🏫</div>Нет центров</div></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {showCreate && (
+        <Modal title="🏫 Создать центр" onClose={()=>setShowCreate(false)}>
+          <Alert msg={err}/>
+          <form onSubmit={create}>
+            <div className="fg"><label className="fl">Название центра</label>
+              <input className="fi" required value={form.name} onChange={set('name')} placeholder="Astana Excellence Academy"/>
+            </div>
+            <div className="fg"><label className="fl">Тариф</label>
+              <select className="fi" value={form.plan} onChange={set('plan')}>
+                <option value="basic">Basic</option>
+                <option value="professional">Professional</option>
+                <option value="enterprise">Enterprise</option>
+              </select>
+            </div>
+            <div style={{background:'var(--primary-light)',borderRadius:8,padding:'10px 12px',fontSize:12,color:'var(--primary)',marginBottom:14}}>
+              ℹ️ Уникальный код центра будет сгенерирован автоматически
+            </div>
+            <div style={{display:'flex',gap:8}}>
+              <button type="submit" className="btn btn-p" style={{flex:1}} disabled={saving}>{saving?'Создание...':'Создать'}</button>
+              <button type="button" className="btn btn-s" onClick={()=>setShowCreate(false)}>Отмена</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Prompt after center creation */}
+      {newCenter && (
+        <Modal title="✅ Центр создан!" onClose={()=>setNewCenter(null)}>
+          <div style={{background:'var(--green-s)',border:'1px solid #a7f3d0',borderRadius:8,padding:'12px 14px',marginBottom:14}}>
+            <div style={{fontWeight:700,color:'#059669',marginBottom:4}}>Центр «{newCenter.name}» успешно создан</div>
+            <div style={{fontSize:12}}>Код центра: <b style={{fontFamily:"'JetBrains Mono',monospace"}}>{newCenter.code}</b></div>
+          </div>
+          <div style={{fontSize:13,color:'var(--muted)',marginBottom:14,lineHeight:1.6}}>
+            <b>Следующий шаг:</b> создайте инвайт-токен для администратора (директора) этого центра. Директор зарегистрируется по токену и получит доступ к управлению.
+          </div>
+          <div style={{display:'flex',gap:8}}>
+            <button className="btn btn-p" style={{flex:1}} onClick={()=>{
+              setNewCenter(null);
+              setInviteCenter(newCenter);
+              setInviteRole('center_admin');
+              setInviteLabel(`Директор ${newCenter.name}`);
+              setInviteResult(null); setInviteErr('');
+            }}>🔑 Создать токен для директора</button>
+            <button className="btn btn-s" onClick={()=>setNewCenter(null)}>Позже</button>
+          </div>
+        </Modal>
+      )}
+
+      {editId && (
+        <Modal title="✏️ Редактировать центр" onClose={()=>setEditId(null)}>
+          <Alert msg={editErr}/>
+          <form onSubmit={saveEdit}>
+            <div className="fg"><label className="fl">Название</label>
+              <input className="fi" required value={editForm.name||''} onChange={e=>setEditForm(p=>({...p,name:e.target.value}))} />
+            </div>
+            <div className="fg"><label className="fl">Тариф</label>
+              <select className="fi" value={editForm.plan||'basic'} onChange={e=>setEditForm(p=>({...p,plan:e.target.value}))}>
+                <option value="basic">Basic</option>
+                <option value="professional">Professional</option>
+                <option value="enterprise">Enterprise</option>
+              </select>
+            </div>
+            <div style={{display:'flex',gap:8}}>
+              <button type="submit" className="btn btn-p" style={{flex:1}}>Сохранить</button>
+              <button type="button" className="btn btn-s" onClick={()=>setEditId(null)}>Отмена</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Invite token modal */}
+      {inviteCenter && (
+        <Modal title={`🔑 Инвайт для «${inviteCenter.name}»`} onClose={closeInvite}>
+          {!inviteResult ? (
+            <>
+              <Alert msg={inviteErr}/>
+              <div style={{background:'var(--surface2)',borderRadius:8,padding:'10px 13px',marginBottom:14,border:'1px solid var(--border)'}}>
+                <div style={{fontSize:12,fontWeight:600}}>{inviteCenter.name}</div>
+                <div style={{fontSize:11,color:'var(--muted)'}}>Код: {inviteCenter.code} · Тариф: {inviteCenter.plan}</div>
+              </div>
+              <form onSubmit={createInvite}>
+                <div className="fg"><label className="fl">Роль</label>
+                  <select className="fi" value={inviteRole} onChange={e=>setInviteRole(e.target.value)}>
+                    <option value="center_admin">Администратор (директор)</option>
+                    <option value="teacher">Учитель</option>
+                    <option value="student">Ученик</option>
+                    <option value="parent">Родитель</option>
+                  </select>
+                </div>
+                <div className="fg"><label className="fl">Метка (необязательно)</label>
+                  <input className="fi" value={inviteLabel} onChange={e=>setInviteLabel(e.target.value)} placeholder="Например: Директор Иванов"/>
+                </div>
+                <div style={{display:'flex',gap:8,marginTop:14}}>
+                  <button type="submit" className="btn btn-p" style={{flex:1}} disabled={inviteLoading}>
+                    {inviteLoading ? 'Создание...' : '🔑 Создать токен'}
+                  </button>
+                  <button type="button" className="btn btn-s" onClick={closeInvite}>Отмена</button>
+                </div>
+              </form>
+            </>
+          ) : (
+            <div>
+              <div style={{background:'var(--green-s)',border:'1px solid #a7f3d0',borderRadius:8,padding:'12px 14px',marginBottom:14}}>
+                <div style={{fontWeight:700,color:'#059669',marginBottom:6}}>✅ Инвайт-токен создан!</div>
+                <div style={{fontSize:12,color:'var(--muted)',marginBottom:8}}>
+                  Роль: <b>{roleLabel[inviteResult.role]}</b> · Центр: <b>{inviteCenter.name}</b>
+                </div>
+                <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:16,fontWeight:700,background:'#fff',border:'1px solid var(--border)',borderRadius:8,padding:'12px 16px',letterSpacing:1,textAlign:'center',userSelect:'all',wordBreak:'break-all'}}>
+                  {inviteResult.token}
+                </div>
+              </div>
+              <div style={{background:'var(--primary-light)',border:'1px solid hsl(160,40%,85%)',borderRadius:8,padding:'12px 14px',marginBottom:14}}>
+                <div style={{fontWeight:700,fontSize:13,color:'var(--primary)',marginBottom:6}}>📋 Инструкция для получателя:</div>
+                <ol style={{fontSize:12,color:'var(--text)',lineHeight:1.8,paddingLeft:18,margin:0}}>
+                  <li>Откройте сайт: <b>{window.location.origin}</b></li>
+                  <li>Нажмите <b>«Регистрация»</b></li>
+                  <li>Вставьте токен: <b style={{fontFamily:"'JetBrains Mono',monospace"}}>{inviteResult.token}</b></li>
+                  <li>Заполните имя, email и пароль</li>
+                  <li>После регистрации вы получите доступ как <b>{roleLabel[inviteResult.role]}</b></li>
+                </ol>
+              </div>
+              <div style={{fontSize:11,color:'var(--muted)',marginBottom:12}}>
+                {new Date(inviteResult.expires_at).getFullYear()>=2099?'♾ Бессрочный':'⏱ Действителен до: '+fmtDate(inviteResult.expires_at)} · Одноразовый — использовать может только один человек.
+              </div>
+              <div style={{display:'flex',gap:8}}>
+                <button className="btn btn-p" style={{flex:1}} onClick={()=>copyToken(inviteResult.token)}>
+                  {copied ? '✅ Скопировано!' : '📋 Скопировать токен'}
+                </button>
+                <button className="btn btn-s" onClick={closeInvite}>Закрыть</button>
+              </div>
+            </div>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ·· CENTER ADMIN DASHBOARD
+function CenterDash({ user, center }) {
+  const { data: stats, loading } = useApi(() => API.get(`/api/centers/stats?centerId=${user.centerId}`));
+  if (loading) return <Spinner/>;
+  return (
+    <div className="fade">
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+        <div>
+          <div className="pt">{center?.name || 'Центр'}</div>
+          <div className="ps" style={{display:'flex',alignItems:'center',gap:8,marginTop:5}}>
+            <span style={{fontFamily:"'JetBrains Mono',monospace",background:'#f3f4f6',padding:'2px 7px',borderRadius:4,fontSize:11}}>{center?.code}</span>
+            <span style={{background:'linear-gradient(135deg,hsl(160,50%,40%),hsl(180,45%,45%))',color:'#fff',padding:'2px 8px',borderRadius:20,fontSize:10,fontWeight:700}}>⚡ {center?.plan}</span>
+          </div>
+        </div>
+      </div>
+      <StatGrid stats={[
+        {label:'Учеников',value:stats?.students||0,sub:`В центре`,icon:'🎓',color:'hsl(160,50%,40%)'},
+        {label:'Учителей',value:stats?.teachers||0,sub:'Активных',icon:'👨‍🏫',color:'#10b981'},
+        {label:'Классов',value:stats?.classes||0,sub:'Активных',icon:'📚',color:'#f59e0b'},
+        {label:'Не проверено',value:stats?.pendingSubmissions||0,sub:'Ждут оценки',icon:'⏳',color:'#ef4444'},
+      ]}/>
+      <div className="g2">
+        <div className="card">
+          <div className="ch"><div className="ct">Активные токены</div></div>
+          <div className="cb">
+            <div style={{fontSize:36,fontWeight:800,color:'var(--accent)'}}>{stats?.activeTokens||0}</div>
+            <div style={{fontSize:12,color:'var(--muted)',marginTop:2}}>Инвайт-кодов ожидает использования</div>
+          </div>
+        </div>
+        <div className="card">
+          <div className="ch"><div className="ct">Всего заданий</div></div>
+          <div className="cb">
+            <div style={{fontSize:36,fontWeight:800,color:'#10b981'}}>{stats?.assignments||0}</div>
+            <div style={{fontSize:12,color:'var(--muted)',marginTop:2}}>Опубликованных заданий</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ·· TEACHER DASHBOARD
+function TeacherDash({ user }) {
+  const { data: classes, loading } = useApi(() => API.get('/api/classes'));
+  const { data: assignments } = useApi(() => API.get('/api/assignments'));
+  if (loading) return <Spinner/>;
+  return (
+    <div className="fade">
+      <div className="ph"><div className="pt">Кабинет учителя</div><div className="ps">{user.name}</div></div>
+      <StatGrid stats={[
+        {label:'Мои классы',value:classes?.length||0,sub:'Активных',icon:'📚',color:'#4f46e5'},
+        {label:'Заданий',value:assignments?.length||0,sub:'Опубликовано',icon:'📋',color:'#f59e0b'},
+        {label:'Не проверено',value:assignments?.reduce((s,a)=>s+(a.pending_grading||0),0)||0,sub:'Ждут оценки',icon:'⏳',color:'#ef4444'},
+        {label:'Учеников',value:classes?.reduce((s,c)=>s+(c.student_count||0),0)||0,sub:'Всего',icon:'🎓',color:'#10b981'},
+      ]}/>
+      <div style={{fontWeight:700,fontSize:14,marginBottom:12}}>Мои классы</div>
+      <div className="g3" style={{marginBottom:16}}>
+        {(classes||[]).map(c=>(
+          <div className="card" key={c.id} style={{padding:'14px 16px',borderLeft:`4px solid ${c.color||'#6366f1'}`}}>
+            <div style={{fontWeight:700,fontSize:13}}>{c.name}</div>
+            <div style={{fontSize:11,color:'var(--muted)',marginTop:2}}>{c.subject} · {c.student_count||0} учеников</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ·· STUDENT DASHBOARD
+function StudentDash({ user }) {
+  const { data: grades, loading } = useApi(() => API.get(`/api/grades/student/${user.id}`));
+  const { data: assignments } = useApi(() => API.get('/api/assignments'));
+  if (loading) return <Spinner/>;
+  const pending = (assignments||[]).filter(a=>!a.submission_id && new Date(a.due_date)>=new Date());
+  const overdue = (assignments||[]).filter(a=>!a.submission_id && new Date(a.due_date)<new Date());
+  const avgPct = grades?.length ? Math.round(grades.filter(g=>g.pct!==null).reduce((s,g)=>s+(g.pct||0),0)/grades.filter(g=>g.pct!==null).length) : null;
+  return (
+    <div className="fade">
+      <div className="ph" style={{display:'flex',alignItems:'center',gap:14}}>
+        <div className="ava" style={{width:48,height:48,fontSize:18,background:`linear-gradient(135deg,${avaColor('student')},#ef4444)`,borderRadius:14}}>{initials(user.name)}</div>
+        <div><div className="pt">{user.name}</div><div className="ps">Ученик</div></div>
+      </div>
+      <StatGrid stats={[
+        {label:'Средний балл',value:avgPct!==null?`${avgPct}%`:'—',sub:'По всем предметам',icon:'📈',color:'#10b981'},
+        {label:'Заданий',value:pending.length,sub:'Нужно сдать',icon:'📋',color:'#4f46e5'},
+        {label:'Просрочено',value:overdue.length,sub:'Нужно исправить',icon:'⚠️',color:'#ef4444'},
+        {label:'Предметов',value:grades?.length||0,sub:'Активных',icon:'📚',color:'#f59e0b'},
+      ]}/>
+      <div style={{fontWeight:700,fontSize:14,marginBottom:12}}>Оценки по предметам</div>
+      <div className="card">
+        <div style={{padding:'2px 18px'}}>
+          {(grades||[]).map((g,i)=>(
+            <div key={g.id} style={{display:'flex',alignItems:'center',gap:12,padding:'11px 0',borderBottom:i<grades.length-1?'1px solid var(--border)':'none'}}>
+              <div className="gc" style={{background:gBg(g.pct),color:gColor(g.pct)}}>{g.letter||'—'}</div>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:13}}>{g.name}</div>
+                <div style={{fontSize:11,color:'var(--muted)'}}>{g.teacher_name} · {g.subject}</div>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontWeight:800,fontSize:16,color:gColor(g.pct)}}>{g.pct!==null?`${g.pct}%`:'—'}</div>
+                <div style={{fontSize:11,color:'var(--muted)'}}>{g.totalScore}/{g.totalMax} б.</div>
+              </div>
+            </div>
+          ))}
+          {(!grades||!grades.length)&&<div className="empty"><div className="empty-ico">📊</div>Нет данных</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ·· PARENT DASHBOARD
+function ParentDash({ user }) {
+  const { data: children } = useApi(() => API.get('/api/users/me/children'));
+  const [childId, setChildId] = useState(null);
+  const effectiveChildId = childId || children?.[0]?.id;
+  const { data: grades } = useApi(() => effectiveChildId ? API.get(`/api/grades/student/${effectiveChildId}`) : Promise.resolve([]), [effectiveChildId]);
+  const child = children?.find(c=>c.id===effectiveChildId);
+  const avgPct = grades?.filter(g=>g.pct!==null).length ? Math.round(grades.filter(g=>g.pct!==null).reduce((s,g)=>s+g.pct,0)/grades.filter(g=>g.pct!==null).length) : null;
+  return (
+    <div className="fade">
+      <div className="ph"><div className="pt">Родительский кабинет</div><div className="ps">{user.name}</div></div>
+      {children?.length>1 && (
+        <div style={{display:'flex',gap:8,marginBottom:16}}>
+          {children.map(c=>(
+            <button key={c.id} className={`btn ${effectiveChildId===c.id?'btn-p':'btn-s'}`} onClick={()=>setChildId(c.id)}>{c.name}</button>
+          ))}
+        </div>
+      )}
+      {child && (
+        <div className="card" style={{padding:'16px 18px',marginBottom:16,display:'flex',alignItems:'center',gap:14}}>
+          <div className="ava" style={{width:48,height:48,fontSize:18,background:`linear-gradient(135deg,#f59e0b,#ef4444)`,borderRadius:14}}>{initials(child.name)}</div>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:800,fontSize:16}}>{child.name}</div>
+            <div style={{fontSize:12,color:'var(--muted)'}}>Средний балл: <strong style={{color:gColor(avgPct||0)}}>{avgPct!==null?`${avgPct}%`:'—'}</strong></div>
+          </div>
+          <span className="bdg bg">✅ Активен</span>
+        </div>
+      )}
+      <div style={{fontWeight:700,fontSize:14,marginBottom:12}}>Оценки по предметам</div>
+      <div className="card">
+        <div style={{padding:'2px 18px'}}>
+          {(grades||[]).map((g,i)=>(
+            <div key={g.id} style={{display:'flex',alignItems:'center',gap:12,padding:'11px 0',borderBottom:i<grades.length-1?'1px solid var(--border)':'none'}}>
+              <div className="gc" style={{background:gBg(g.pct),color:gColor(g.pct)}}>{g.letter||'—'}</div>
+              <div style={{flex:1}}><div style={{fontWeight:700,fontSize:13}}>{g.name}</div><div style={{fontSize:11,color:'var(--muted)'}}>{g.teacher_name}</div></div>
+              <div style={{textAlign:'right'}}><div style={{fontWeight:800,fontSize:16,color:gColor(g.pct)}}>{g.pct!==null?`${g.pct}%`:'—'}</div></div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ·· TOKENS VIEW
+function TokensView() {
+  const user = API.getUser();
+  const confirm = useConfirm();
+  const isSuperAdmin = user?.role === 'super_admin';
+  const { data: centers } = useApi(() => isSuperAdmin ? API.get('/api/centers') : Promise.resolve(null));
+  const [centerId, setCenterId] = useState(null);
+  const effectiveCenterId = isSuperAdmin ? (centerId || centers?.[0]?.id) : null;
+  const tokenUrl = isSuperAdmin && effectiveCenterId ? `/api/tokens?centerId=${effectiveCenterId}` : '/api/tokens';
+  const studentUrl = isSuperAdmin && effectiveCenterId ? `/api/users?role=student&centerId=${effectiveCenterId}` : '/api/users?role=student';
+  const { data: tokens, loading, reload } = useApi(() => {
+    if (isSuperAdmin && !effectiveCenterId) return Promise.resolve([]);
+    return API.get(tokenUrl);
+  }, [tokenUrl, effectiveCenterId]);
+  const { data: students } = useApi(() => {
+    if (isSuperAdmin && !effectiveCenterId) return Promise.resolve([]);
+    return API.get(studentUrl);
+  }, [studentUrl, effectiveCenterId]);
+  const [showModal, setShowModal] = useState(false);
+  const [form, setForm] = useState({ role:'student', label:'', expiresInDays:0, linkedStudentId:'' });
+  const [err, setErr] = useState('');
+  const [copied, setCopied] = useState(null);
+  const set = k => e => setForm(p=>({...p,[k]:e.target.value}));
+
+  async function create(e) {
+    e.preventDefault(); setErr('');
+    try {
+      const payload = { ...form };
+      if (form.linkedStudentId) payload.linkedStudentId = parseInt(form.linkedStudentId);
+      else delete payload.linkedStudentId;
+      if (isSuperAdmin && effectiveCenterId) payload.centerId = effectiveCenterId;
+      const url = isSuperAdmin && effectiveCenterId ? `/api/tokens?centerId=${effectiveCenterId}` : '/api/tokens';
+      await API.post(url, payload);
+      reload(); setShowModal(false); setForm({role:'student',label:'',expiresInDays:0,linkedStudentId:''});
+    } catch(ex) { setErr(ex.message); }
+  }
+
+  async function revoke(id) {
+    const ok = await confirm('Токен будет отозван и больше не сможет быть использован.', 'Отозвать токен?', { icon: '⚠️', danger: true, confirmText: 'Отозвать' });
+    if (!ok) return;
+    try { await API.del(`/api/tokens/${id}`); reload(); } catch(ex) { alert(ex.message); }
+  }
+
+  function copy(token, id) {
+    navigator.clipboard?.writeText(token).catch(()=>{});
+    setCopied(id); setTimeout(()=>setCopied(null),2000);
+  }
+
+  if (loading) return <Spinner/>;
+  const active = (tokens||[]).filter(t=>!t.used_by);
+  return (
+    <div className="fade">
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+        <div><div className="pt">Управление токенами</div><div className="ps">Инвайт-коды для подключения пользователей</div></div>
+        <button className="btn btn-p" onClick={()=>setShowModal(true)}>🔑 Создать токен</button>
+      </div>
+      <div className="card" style={{padding:'14px 18px',marginBottom:16}}>
+        <div style={{display:'flex',gap:24,flexWrap:'wrap',alignItems:'center'}}>
+          <div style={{fontSize:13,color:'var(--muted)',flex:1}}>
+            Создайте токен → Отправьте пользователю → Он регистрируется → Автоматически привязывается к центру
+          </div>
+          {[{label:'Всего',val:(tokens||[]).length,c:'#4f46e5'},{label:'Активных',val:active.length,c:'#10b981'},{label:'Использовано',val:(tokens||[]).length-active.length,c:'#6b7280'}].map(s=>(
+            <div key={s.label} style={{textAlign:'center'}}>
+              <div style={{fontWeight:800,fontSize:22,color:s.c}}>{s.val}</div>
+              <div style={{fontSize:10,color:'var(--muted)'}}>{s.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      {isSuperAdmin && centers?.length > 0 && (
+        <div style={{marginBottom:14,display:'flex',alignItems:'center',gap:10}}>
+          <label style={{fontSize:12,fontWeight:600,color:'var(--muted)'}}>Центр:</label>
+          <select className="fi" style={{width:280}} value={effectiveCenterId||''} onChange={e=>setCenterId(parseInt(e.target.value))}>
+            {centers.map(c=><option key={c.id} value={c.id}>{c.name} ({c.code})</option>)}
+          </select>
+        </div>
+      )}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(320px,1fr))',gap:12}}>
+        {(tokens||[]).map(t=>(
+          <div className="card" key={t.id} style={{padding:'13px 15px',opacity:t.used_by?0.65:1}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+              <div><div style={{fontWeight:700,fontSize:13}}>{t.label||'Без метки'}</div>{t.linked_student_name&&<div style={{fontSize:11,color:'#ec4899',marginTop:2}}>👶 {t.linked_student_name}</div>}<div style={{fontSize:10,color:'var(--muted)',marginTop:1}}>{new Date(t.expires_at).getFullYear()>=2099?'♾ Бессрочный':`Истекает ${fmtDate(t.expires_at)}`}</div></div>
+              <span className={`bdg ${t.role==='teacher'?'bp':t.role==='student'?'bg':t.role==='parent'?'ba':'bb'}`}>{roleLabel[t.role]}</span>
+            </div>
+            <div className="tok-str">
+              <span>{t.token}</span>
+              <span style={{cursor:'pointer',fontSize:14,opacity:.7}} onClick={()=>copy(t.token,t.id)}>{copied===t.id?'✅':'📋'}</span>
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <span className={`bdg ${t.used_by?'bk':'bg'}`}>{t.used_by?`✓ ${t.used_by_name||'Использован'}`:'⬤ Активен'}</span>
+              {!t.used_by && <button className="btn btn-d btn-sm" onClick={()=>revoke(t.id)}>Отозвать</button>}
+            </div>
+          </div>
+        ))}
+      </div>
+      {showModal && (
+        <Modal title="🔑 Создать инвайт-токен" onClose={()=>setShowModal(false)}>
+          <Alert msg={err}/>
+          <form onSubmit={create}>
+            <div className="fg"><label className="fl">Роль</label>
+              <select className="fi" value={form.role} onChange={e=>setForm(p=>({...p,role:e.target.value,linkedStudentId:''}))}>
+                <option value="student">Ученик</option><option value="teacher">Учитель</option>
+                <option value="parent">Родитель</option>
+                {isSuperAdmin && <option value="center_admin">Администратор (директор)</option>}
+              </select>
+            </div>
+            {form.role==='parent' && (
+              <div className="fg"><label className="fl">Ребёнок <span style={{color:'var(--muted)',fontWeight:400}}>(привязать к ученику)</span></label>
+                <select className="fi" value={form.linkedStudentId} onChange={set('linkedStudentId')}>
+                  <option value="">— выберите ученика —</option>
+                  {(students||[]).map(s=><option key={s.id} value={s.id}>{s.name} ({s.email})</option>)}
+                </select>
+              </div>
+            )}
+            <div className="fg"><label className="fl">Метка</label><input className="fi" value={form.label} onChange={set('label')} placeholder="Например: Мама Алины"/></div>
+            <div className="fg"><label className="fl">Срок действия</label>
+              <select className="fi" value={form.expiresInDays} onChange={set('expiresInDays')}>
+                <option value={0}>♾ Бессрочный (до использования)</option>
+                <option value={7}>7 дней</option><option value={14}>14 дней</option>
+                <option value={30}>30 дней</option><option value={90}>90 дней</option>
+              </select>
+            </div>
+            <div style={{display:'flex',gap:8,marginTop:14}}>
+              <button type="submit" className="btn btn-p" style={{flex:1}}>Создать</button>
+              <button type="button" className="btn btn-s" onClick={()=>setShowModal(false)}>Отмена</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ·· ATTENDANCE VIEW (teacher / center_admin)
+function AttendanceTeacherView({ user }) {
+  const isTeacher = user.role === 'teacher';
+  const { data: classes } = useApi(() => API.get('/api/classes'));
+  const [classId, setClassId] = useState(null);
+  const effectiveCls = classId || classes?.[0]?.id;
+
+  // Month navigation
+  const today = new Date();
+  const [year, setYear] = useState(today.getFullYear());
+  const [month, setMonth] = useState(today.getMonth()); // 0-based
+
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const monthDates = Array.from({ length: daysInMonth }, (_, i) => {
+    const d = new Date(year, month, i + 1);
+    return d.toISOString().slice(0, 10);
+  });
+  const from = monthDates[0];
+  const to = monthDates[monthDates.length - 1];
+
+  const { data, loading, reload } = useApi(() =>
+    effectiveCls ? API.get(`/api/attendance/${effectiveCls}?from=${from}&to=${to}`) : Promise.resolve(null),
+    [effectiveCls, from, to]
+  );
+
+  const [saving, setSaving] = useState({});
+
+  const statusCycle = ['present', 'absent', 'late', 'excused'];
+  const statusColors = { present: '#10b981', absent: '#ef4444', late: '#f59e0b', excused: '#6b7280' };
+  const statusLabels = { present: '✓', absent: '✗', late: '⏱', excused: 'E' };
+  const statusTitles = { present: 'Присутствует', absent: 'Отсутствует', late: 'Опоздал', excused: 'Уважительная' };
+
+  const MONTH_NAMES = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+  const DAY_SHORTS = ['Вс','Пн','Вт','Ср','Чт','Пт','Сб'];
+
+  function getRecord(studentId, date) {
+    return (data?.records || []).find(r => r.student_id === studentId && r.date === date);
+  }
+
+  async function toggleCell(studentId, date) {
+    if (!isTeacher) return;
+    const rec = getRecord(studentId, date);
+    const currentStatus = rec?.status || null;
+    const nextIdx = currentStatus ? (statusCycle.indexOf(currentStatus) + 1) % statusCycle.length : 0;
+    const nextStatus = statusCycle[nextIdx];
+
+    const key = `${studentId}-${date}`;
+    setSaving(p => ({ ...p, [key]: true }));
+    try {
+      await API.patch(`/api/attendance/${effectiveCls}/${studentId}/${date}`, { status: nextStatus });
+      reload();
+    } catch (ex) { console.error(ex); }
+    setSaving(p => ({ ...p, [key]: false }));
+  }
+
+  async function fillDayAll(date, status) {
+    if (!isTeacher || !data?.summary) return;
+    setSaving(p => ({ ...p, [`day-${date}`]: true }));
+    try {
+      const records = data.summary.map(s => ({ studentId: s.id, status }));
+      await API.post(`/api/attendance/${effectiveCls}`, { date, records });
+      reload();
+    } catch (ex) { console.error(ex); }
+    setSaving(p => ({ ...p, [`day-${date}`]: false }));
+  }
+
+  function exportCsv() {
+    if (!effectiveCls) return;
+    window.open(`/api/attendance/${effectiveCls}/export?token=${API.getToken()}`, '_blank');
+  }
+
+  function prevMonth() {
+    if (month === 0) { setMonth(11); setYear(y => y - 1); }
+    else setMonth(m => m - 1);
+  }
+  function nextMonth() {
+    if (month === 11) { setMonth(0); setYear(y => y + 1); }
+    else setMonth(m => m + 1);
+  }
+  function goToday() {
+    setYear(today.getFullYear());
+    setMonth(today.getMonth());
+  }
+
+  // Compute summary for current month from loaded records
+  function getMonthSummary(studentId) {
+    const recs = (data?.records || []).filter(r => r.student_id === studentId);
+    const counts = { present: 0, absent: 0, late: 0, excused: 0 };
+    recs.forEach(r => { if (counts[r.status] !== undefined) counts[r.status]++; });
+    const total = recs.length;
+    const pct = total > 0 ? Math.round(((counts.present + counts.late * 0.5) / total) * 100) : 100;
+    return { ...counts, total, pct };
+  }
+
+  const todayStr = today.toISOString().slice(0, 10);
+  const isCurrentMonth = year === today.getFullYear() && month === today.getMonth();
+
+  return (
+    <div className="fade">
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+        <div>
+          <div className="pt">Посещаемость</div>
+          {isTeacher && <div className="ps">Кликайте по ячейке для смены статуса: ✓ → ✗ → ⏱ → E</div>}
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          {effectiveCls && data && <button className="btn btn-s" onClick={exportCsv}>⬇ CSV</button>}
+        </div>
+      </div>
+
+      {/* Class selector */}
+      {classes?.length > 0 && (
+        <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap'}}>
+          {classes.map(c => (
+            <button key={c.id} className={`btn ${effectiveCls===c.id?'btn-p':'btn-s'}`} onClick={()=>setClassId(c.id)}>{c.name}</button>
+          ))}
+        </div>
+      )}
+
+      {/* Month navigation */}
+      <div className="card" style={{padding:'10px 16px',marginBottom:14,display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <button className="btn btn-s btn-sm" onClick={prevMonth}>← {MONTH_NAMES[(month+11)%12].slice(0,3)}</button>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <span style={{fontWeight:800,fontSize:16}}>{MONTH_NAMES[month]} {year}</span>
+          {!isCurrentMonth && <button className="btn btn-s btn-sm" onClick={goToday}>Сегодня</button>}
+        </div>
+        <button className="btn btn-s btn-sm" onClick={nextMonth}>{MONTH_NAMES[(month+1)%12].slice(0,3)} →</button>
+      </div>
+
+      {loading ? <Spinner/> : data ? (
+        <div className="card">
+          <div style={{overflowX:'auto'}}>
+            <table className="tbl" style={{minWidth: 200 + daysInMonth * 38}}>
+              <thead>
+                <tr>
+                  <th style={{position:'sticky',left:0,background:'var(--surface2)',zIndex:2,minWidth:140}}>Ученик</th>
+                  <th style={{textAlign:'center',minWidth:50}}>%</th>
+                  {monthDates.map(d => {
+                    const dayNum = parseInt(d.slice(8));
+                    const dayOfWeek = new Date(d).getDay();
+                    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                    const isToday = d === todayStr;
+                    return (
+                      <th key={d} style={{
+                        textAlign:'center',padding:'4px 2px',minWidth:34,
+                        background: isToday ? 'var(--primary-light)' : isWeekend ? '#f9fafb' : 'var(--surface2)',
+                        borderBottom: isToday ? '2px solid var(--primary)' : undefined,
+                      }}>
+                        <div style={{fontSize:8,color:isWeekend?'var(--red)':'var(--muted)',lineHeight:1}}>{DAY_SHORTS[dayOfWeek]}</div>
+                        <div style={{fontSize:11,fontWeight:700,color:isToday?'var(--primary)':isWeekend?'var(--red)':'var(--text)'}}>{dayNum}</div>
+                        {isTeacher && (
+                          <div style={{marginTop:2,cursor:'pointer',fontSize:8,color:'var(--muted)',opacity:.6}} title="Всех ✓"
+                            onClick={()=>fillDayAll(d,'present')}>
+                            {saving[`day-${d}`] ? '...' : '▼'}
+                          </div>
+                        )}
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {(data.summary || []).map(s => {
+                  const ms = getMonthSummary(s.id);
+                  return (
+                    <tr key={s.id}>
+                      <td style={{position:'sticky',left:0,background:'#fff',zIndex:1,fontWeight:600,fontSize:12,whiteSpace:'nowrap',borderRight:'1px solid var(--border)'}}>
+                        {s.name}
+                      </td>
+                      <td style={{textAlign:'center'}}>
+                        <span style={{fontWeight:700,fontSize:11,color:ms.pct>=90?'var(--green)':ms.pct>=75?'#d97706':'var(--red)'}}>{ms.total > 0 ? `${ms.pct}%` : '—'}</span>
+                      </td>
+                      {monthDates.map(d => {
+                        const rec = getRecord(s.id, d);
+                        const status = rec?.status;
+                        const dayOfWeek = new Date(d).getDay();
+                        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                        const isToday = d === todayStr;
+                        const key = `${s.id}-${d}`;
+                        const isSaving = saving[key];
+                        return (
+                          <td key={d} style={{
+                            textAlign:'center', padding:'3px 1px',
+                            background: isToday ? 'var(--primary-light)' : isWeekend ? '#fafafa' : '#fff',
+                            cursor: isTeacher ? 'pointer' : 'default',
+                          }}
+                            onClick={() => toggleCell(s.id, d)}
+                            title={status ? statusTitles[status] : 'Не отмечено'}
+                          >
+                            {isSaving ? (
+                              <span style={{fontSize:10,color:'var(--muted)'}}>···</span>
+                            ) : status ? (
+                              <span style={{
+                                display:'inline-flex',alignItems:'center',justifyContent:'center',
+                                width:26,height:26,borderRadius:6,fontSize:12,fontWeight:800,
+                                background: statusColors[status] + '18',
+                                color: statusColors[status],
+                                transition: 'all .15s',
+                              }}>{statusLabels[status]}</span>
+                            ) : (
+                              <span style={{
+                                display:'inline-flex',alignItems:'center',justifyContent:'center',
+                                width:26,height:26,borderRadius:6,fontSize:10,
+                                color:'#d1d5db',
+                              }}>{isTeacher ? '·' : '—'}</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {/* Legend + month summary */}
+          <div style={{padding:'12px 16px',borderTop:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12}}>
+            <div style={{display:'flex',gap:14,alignItems:'center',flexWrap:'wrap'}}>
+              {statusCycle.map(st => (
+                <div key={st} style={{display:'flex',alignItems:'center',gap:4,fontSize:11}}>
+                  <span style={{display:'inline-flex',width:20,height:20,borderRadius:5,alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:800,background:statusColors[st]+'18',color:statusColors[st]}}>{statusLabels[st]}</span>
+                  <span style={{color:'var(--muted)'}}>{statusTitles[st]}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{fontSize:11,color:'var(--muted)'}}>
+              {MONTH_NAMES[month]} {year} · {daysInMonth} дней · {data.summary?.length || 0} учеников
+            </div>
+          </div>
+        </div>
+      ) : <div className="empty"><div className="empty-ico">✅</div>Выберите класс</div>}
+    </div>
+  );
+}
+
+function AttendanceView({ user }) {
+  if (user.role === 'student' || user.role === 'parent') return <AttendancePersonalView user={user}/>;
+  return <AttendanceTeacherView user={user}/>;
+}
+
+function AttendancePersonalView({ user }) {
+  const { data: children } = useApi(() => user.role==='parent' ? API.get('/api/users/me/children') : Promise.resolve(null));
+  const [childId, setChildId] = useState(null);
+  const targetId = user.role==='parent' ? (childId||children?.[0]?.id) : user.id;
+  const { data, loading } = useApi(() => targetId ? API.get(`/api/attendance/my/${targetId}`) : Promise.resolve(null), [targetId]);
+
+  const sCol = { present:'#10b981', absent:'#ef4444', late:'#f59e0b', excused:'#6b7280' };
+  const sIco  = { present:'✓', absent:'✗', late:'⏱', excused:'E' };
+  const sLbl  = { present:'Присут.', absent:'Пропуск', late:'Опоздал', excused:'Уваж.' };
+
+  return (
+    <div className="fade">
+      <div className="ph"><div className="pt">Моя посещаемость</div></div>
+      {user.role==='parent' && children?.length>1 && (
+        <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap'}}>
+          {children.map(c=><button key={c.id} className={`btn ${targetId===c.id?'btn-p':'btn-s'}`} onClick={()=>setChildId(c.id)}>{c.name}</button>)}
+        </div>
+      )}
+      {loading ? <Spinner/> : data ? (
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          {(data.classes||[]).map(cls=>(
+            <div className="card" key={cls.id}>
+              <div style={{padding:'14px 18px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',gap:12}}>
+                <div style={{width:8,height:40,borderRadius:4,background:cls.color||'var(--primary)',flexShrink:0}}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:800,fontSize:16}}>{cls.name}</div>
+                  {cls.subject && <div style={{fontSize:12,color:'var(--muted)'}}>{cls.subject}</div>}
+                </div>
+                <div style={{textAlign:'right'}}>
+                  <div style={{fontWeight:800,fontSize:22,color:cls.pct>=90?'var(--green)':cls.pct>=75?'#d97706':'var(--red)'}}>{cls.pct}%</div>
+                  <div style={{fontSize:11,color:'var(--muted)'}}>{cls.present}✓ {cls.absent}✗ {cls.late}⏱</div>
+                </div>
+              </div>
+              <div className="cb" style={{padding:'10px 0 6px'}}>
+                {cls.records.length > 0 ? (
+                  <table className="tbl" style={{fontSize:11}}>
+                    <thead><tr><th>Дата</th><th>Статус</th></tr></thead>
+                    <tbody>
+                      {cls.records.map((r,i)=>(
+                        <tr key={i}>
+                          <td style={{fontWeight:600,maxWidth:100,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{fmtDate(r.date)}</td>
+                          <td style={{textAlign:'center'}}>
+                            <span className={`bdg ${r.status==='graded'?'bg':r.status==='submitted'?'ba':'bk'}`}>{r.status==='graded'?'Проверено':r.status==='submitted'?'Сдано':'—'}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : <div style={{textAlign:'center',padding:'12px',fontSize:12,color:'var(--muted)'}}>Нет данных</div>}
+              </div>
+            </div>
+          ))}
+          {(!data.classes||!data.classes.length)&&<div className="empty"><div className="empty-ico">📊</div>Нет данных о посещаемости</div>}
+        </div>
+      ) : <div className="empty"><div className="empty-ico">✅</div>Загрузка...</div>}
+    </div>
+  );
+}
+
+// ·· GRADES VIEW (student/parent)
+function GradesView({ user }) {
+  const [childId, setChildId] = useState(null);
+  const { data: children } = useApi(() => user.role==='parent' ? API.get('/api/users/me/children') : Promise.resolve(null));
+  const targetId = user.role==='parent' ? (childId||children?.[0]?.id) : user.id;
+  const { data: grades, loading } = useApi(() => targetId ? API.get(`/api/grades/student/${targetId}`) : Promise.resolve([]), [targetId]);
+
+  return (
+    <div className="fade">
+      <div className="ph"><div className="pt">Оценки</div></div>
+      {user.role==='parent' && children?.length>1 && (
+        <div style={{display:'flex',gap:8,marginBottom:16}}>
+          {children.map(c=><button key={c.id} className={`btn ${targetId===c.id?'btn-p':'btn-s'}`} onClick={()=>setChildId(c.id)}>{c.name}</button>)}
+        </div>
+      )}
+      {loading ? <Spinner/> : (
+        <div style={{display:'flex',flexDirection:'column',gap:12}}>
+          {(grades||[]).map(g=>(
+            <div className="card" key={g.id}>
+              <div style={{padding:'14px 18px',display:'flex',alignItems:'center',gap:12,borderBottom:'1px solid var(--border)'}}>
+                <div className="gc" style={{background:gBg(g.pct),color:gColor(g.pct),width:50,height:50,fontSize:16}}>{g.letter||'—'}</div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:800,fontSize:15}}>{g.name}</div>
+                  <div style={{fontSize:12,color:'var(--muted)'}}>{g.subject} · {g.teacher_name}</div>
+                </div>
+                <div style={{textAlign:'right'}}>
+                  <div style={{fontWeight:800,fontSize:22,color:gColor(g.pct)}}>{g.pct!==null?`${g.pct}%`:'—'}</div>
+                  <div style={{fontSize:11,color:'var(--muted)'}}>{g.totalScore}/{g.totalMax} баллов</div>
+                </div>
+              </div>
+              <div className="cb" style={{padding:'10px 0 6px'}}>
+                {g.submissions.length > 0 ? (
+                  <table className="tbl" style={{fontSize:11}}>
+                    <thead><tr><th>Задание</th><th>Тип</th><th>До</th><th>Балл</th><th>Статус</th></tr></thead>
+                    <tbody>
+                      {g.submissions.map((s,i)=>(
+                        <tr key={i}>
+                          <td style={{fontWeight:600,maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.title}</td>
+                          <td>{typeIco(s.type)}</td>
+                          <td style={{color:'var(--muted)'}}>{fmtDate(s.due_date)}</td>
+                          <td>
+                            {s.score!==null ? <span style={{fontWeight:700,color:gColor((s.score/s.max_score)*100)}}>{s.score}/{s.max_score}</span> : <span className="bdg ba">Не проверено</span>}
+                          </td>
+                          <td><span className={`bdg ${s.status==='graded'?'bg':s.status==='submitted'?'ba':'bk'}`}>{s.status==='graded'?'Проверено':s.status==='submitted'?'Сдано':'—'}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : <div style={{textAlign:'center',padding:'12px',fontSize:12,color:'var(--muted)'}}>Нет сданных работ</div>}
+              </div>
+            </div>
+          ))}
+          {(!grades||!grades.length)&&<div className="empty"><div className="empty-ico">📊</div>Нет данных об оценках</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ·· CLASSES VIEW
+function ClassesView({ user }) {
+  const { data: classes, loading, reload } = useApi(() => API.get('/api/classes'));
+  const { data: teachers } = useApi(() =>
+    ['center_admin','super_admin'].includes(user.role) ? API.get('/api/users?role=teacher') : Promise.resolve([])
+  );
+  const { data: students } = useApi(() =>
+    ['center_admin','super_admin','teacher'].includes(user.role) ? API.get('/api/users?role=student') : Promise.resolve([])
+  );
+  const [showCreate, setShowCreate] = useState(false);
+  const [form, setForm] = useState({ name:'', subject:'', teacherId:'', color:'#6366f1' });
+  const [err, setErr] = useState('');
+  const [detail, setDetail] = useState(null);
+  const [detailData, setDetailData] = useState(null);
+  const [enrollIds, setEnrollIds] = useState([]);
+  const [showEnroll, setShowEnroll] = useState(false);
+  const [editCls, setEditCls] = useState(null);
+  const [editForm, setEditForm] = useState({ name:'', subject:'', teacherId:'', color:'' });
+  const [editErr, setEditErr] = useState('');
+  const canManage = ['center_admin','super_admin','teacher'].includes(user.role);
+  const isAdmin = ['center_admin','super_admin'].includes(user.role);
+  const toast = useToast();
+  const confirm = useConfirm();
+
+  async function loadDetail(id) {
+    try { const d = await API.get(`/api/classes/${id}`); setDetailData(d); setDetail(id); } catch(ex) { alert(ex.message); }
+  }
+
+  async function create(e) {
+    e.preventDefault(); setErr('');
+    try {
+      const body = { name: form.name, subject: form.subject || undefined, color: form.color };
+      if (isAdmin && form.teacherId) body.teacherId = parseInt(form.teacherId);
+      await API.post('/api/classes', body);
+      reload(); setShowCreate(false); setForm({ name:'', subject:'', teacherId:'', color:'#6366f1' });
+      toast('Класс создан', 'success');
+    } catch(ex) { setErr(ex.message); }
+  }
+
+  async function saveEdit(e) {
+    e.preventDefault(); setEditErr('');
+    try {
+      const body = { name: editForm.name, subject: editForm.subject, color: editForm.color };
+      if (editForm.teacherId) body.teacherId = parseInt(editForm.teacherId);
+      await API.patch(`/api/classes/${editCls.id}`, body);
+      reload(); setEditCls(null); toast('Класс обновлён', 'success');
+    } catch(ex) { setEditErr(ex.message); }
+  }
+
+  async function enroll(e) {
+    e.preventDefault();
+    if (!enrollIds.length) return;
+    try {
+      await API.post(`/api/classes/${detail}/enroll`, { studentIds: enrollIds.map(Number) });
+      loadDetail(detail); setShowEnroll(false); setEnrollIds([]); toast('Ученики записаны', 'success');
+    } catch(ex) { alert(ex.message); }
+  }
+
+  async function unenroll(studentId) {
+    const ok = await confirm('Ученик будет удалён из этого класса. Его оценки и посещаемость сохранятся.', 'Удалить ученика из класса?', { icon: '👤', danger: true, confirmText: 'Удалить' });
+    if (!ok) return;
+    try { await API.del(`/api/classes/${detail}/enroll/${studentId}`); loadDetail(detail); toast('Ученик удалён из класса', 'success'); } catch(ex) { alert(ex.message); }
+  }
+
+  if (loading) return <Spinner/>;
+
+  if (detail && detailData) {
+    const cls = detailData;
+    const enrolledIds = (cls.students||[]).map(s=>s.id);
+    const available = (students||[]).filter(s => !enrolledIds.includes(s.id));
+    return (
+      <div className="fade">
+        <div style={{marginBottom:16}}>
+          <button className="btn btn-s btn-sm" onClick={()=>{setDetail(null);setDetailData(null);}}>← Назад к классам</button>
+        </div>
+        <div className="card" style={{marginBottom:16}}>
+          <div style={{padding:'18px',display:'flex',alignItems:'center',gap:14}}>
+            <div style={{width:48,height:48,borderRadius:12,background:cls.color||'#6366f1',display:'flex',alignItems:'center',justifyContent:'center',fontSize:22,color:'#fff',fontWeight:800}}>
+              {cls.name?.[0]||'?'}
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:800,fontSize:18}}>{cls.name}</div>
+              <div style={{fontSize:12,color:'var(--muted)'}}>{cls.subject||'Без предмета'} · {cls.teacher_name||'Без учителя'}</div>
+            </div>
+            <span className="bdg bg">{(cls.students||[]).length} учеников</span>
+          </div>
+        </div>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <div style={{fontWeight:700,fontSize:14}}>Ученики класса</div>
+          {canManage && <button className="btn btn-p btn-sm" onClick={()=>setShowEnroll(true)}>+ Записать</button>}
+        </div>
+        <div className="card">
+          <div className="cb" style={{padding:0}}>
+            <table className="tbl">
+              <thead><tr><th>Имя</th><th>Email</th>{canManage&&<th style={{width:60}}></th>}</tr></thead>
+              <tbody>
+                {(cls.students||[]).map(s=>(
+                  <tr key={s.id}>
+                    <td><div style={{display:'flex',alignItems:'center',gap:8}}>
+                      <div className="ava" style={{width:26,height:26,fontSize:10,background:'#f59e0b'}}>{initials(s.name)}</div>
+                      <span style={{fontWeight:600}}>{s.name}</span>
+                    </div></td>
+                    <td style={{color:'var(--muted)',fontSize:12}}>{s.email}</td>
+                    {canManage&&<td><button className="btn btn-d btn-sm" onClick={()=>unenroll(s.id)}>✕</button></td>}
+                  </tr>
+                ))}
+                {(!cls.students||!cls.students.length)&&<tr><td colSpan={3}><div className="empty"><div className="empty-ico">👥</div>Нет учеников</div></td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {showEnroll && (
+          <Modal title="Записать учеников" onClose={()=>setShowEnroll(false)}>
+            <form onSubmit={enroll}>
+              <div className="fg"><label className="fl">Выберите учеников</label>
+                <select className="fi" multiple style={{height:180}} value={enrollIds} onChange={e=>setEnrollIds([...e.target.selectedOptions].map(o=>o.value))}>
+                  {available.map(s=><option key={s.id} value={s.id}>{s.name} ({s.email})</option>)}
+                </select>
+                <div style={{fontSize:10,color:'var(--muted)',marginTop:4}}>Ctrl+клик для выбора нескольких</div>
+              </div>
+              <div style={{display:'flex',gap:8,marginTop:14}}>
+                <button type="submit" className="btn btn-p" style={{flex:1}}>Записать ({enrollIds.length})</button>
+                <button type="button" className="btn btn-s" onClick={()=>setShowEnroll(false)}>Отмена</button>
+              </div>
+            </form>
+          </Modal>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="fade">
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+        <div><div className="pt">Классы</div><div className="ps">{canManage?'Управление классами и учениками':'Ваши классы'}</div></div>
+        {canManage && <button className="btn btn-p" onClick={()=>setShowCreate(true)}>+ Создать класс</button>}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(300px,1fr))',gap:14}}>
+        {(classes||[]).map(c=>(
+          <div className="card" key={c.id} style={{cursor:'pointer',transition:'all .2s'}} onClick={()=>loadDetail(c.id)}>
+            <div style={{padding:'14px 16px'}}>
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+                <div style={{width:38,height:38,borderRadius:10,background:c.color||'#6366f1',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,color:'#fff',fontWeight:800}}>
+                  {c.name?.[0]||'?'}
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700,fontSize:14}}>{c.name}</div>
+                  <div style={{fontSize:11,color:'var(--muted)'}}>{c.subject||'Без предмета'}</div>
+                </div>
+                {isAdmin && <button className="btn btn-s btn-sm" onClick={e=>{e.stopPropagation();setEditCls(c);setEditForm({name:c.name,subject:c.subject||'',teacherId:c.teacher_id||'',color:c.color||'#6366f1'});setEditErr('');}}>✏️</button>}
+              </div>
+              <div style={{display:'flex',gap:10,fontSize:11,color:'var(--muted)'}}>
+                <span>👨‍🏫 {c.teacher_name||'—'}</span>
+                <span>👥 {c.student_count||0} уч.</span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      {(!classes||!classes.length)&&<div className="empty"><div className="empty-ico">📚</div>Нет классов</div>}
+      {showCreate && (
+        <Modal title="Создать класс" onClose={()=>setShowCreate(false)}>
+          <Alert msg={err}/>
+          <form onSubmit={create}>
+            <div className="fg"><label className="fl">Название</label><input className="fi" required value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Математика 7А"/></div>
+            <div className="fg"><label className="fl">Предмет</label><input className="fi" value={form.subject} onChange={e=>setForm(f=>({...f,subject:e.target.value}))} placeholder="Математика"/></div>
+            {isAdmin && <div className="fg"><label className="fl">Учитель</label>
+              <select className="fi" value={form.teacherId} onChange={e=>setForm(f=>({...f,teacherId:e.target.value}))}>
+                <option value="">— не назначен —</option>
+                {(teachers||[]).map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>}
+            <div className="fg"><label className="fl">Цвет</label><input type="color" value={form.color} onChange={e=>setForm(f=>({...f,color:e.target.value}))} style={{width:60,height:34,border:'none',cursor:'pointer'}}/></div>
+            <div style={{display:'flex',gap:8,marginTop:14}}>
+              <button type="submit" className="btn btn-p" style={{flex:1}}>Создать</button>
+              <button type="button" className="btn btn-s" onClick={()=>setShowCreate(false)}>Отмена</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {editCls && (
+        <Modal title={`Редактировать: ${editCls.name}`} onClose={()=>setEditCls(null)}>
+          <Alert msg={editErr}/>
+          <form onSubmit={saveEdit}>
+            <div className="fg"><label className="fl">Название</label><input className="fi" required value={editForm.name} onChange={e=>setEditForm(f=>({...f,name:e.target.value}))}/></div>
+            <div className="fg"><label className="fl">Предмет</label><input className="fi" value={editForm.subject} onChange={e=>setEditForm(f=>({...f,subject:e.target.value}))}/></div>
+            {isAdmin && <div className="fg"><label className="fl">Учитель</label>
+              <select className="fi" value={editForm.teacherId} onChange={e=>setEditForm(f=>({...f,teacherId:e.target.value}))}>
+                <option value="">— не назначен —</option>
+                {(teachers||[]).map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>}
+            <div className="fg"><label className="fl">Цвет</label><input type="color" value={editForm.color} onChange={e=>setEditForm(f=>({...f,color:e.target.value}))} style={{width:60,height:34,border:'none',cursor:'pointer'}}/></div>
+            <div style={{display:'flex',gap:8,marginTop:14}}>
+              <button type="submit" className="btn btn-p" style={{flex:1}}>Сохранить</button>
+              <button type="button" className="btn btn-s" onClick={()=>setEditCls(null)}>Отмена</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ·· GRADE MODAL (красивая форма выставления оценки)
+function GradeModal({ submission, assignment, onGrade, onClose }) {
+  const [selectedScore, setSelectedScore] = useState(null);
+  const [feedback, setFeedback] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const maxScore = assignment.max_score || 10;
+  const gradingScale = assignment.grading_scale || '10-point';
+  const buttons = Array.from({length: maxScore}, (_, i) => i + 1);
+
+  async function handleSubmit() {
+    if (selectedScore === null) {
+      alert('Выберите оценку');
+      return;
+    }
+    setLoading(true);
+    try {
+      await onGrade(submission.id, selectedScore, feedback);
+      onClose();
+    } catch(ex) {
+      alert(ex.message);
+    }
+    setLoading(false);
+  }
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="modal" style={{maxWidth:500}} onClick={e=>e.stopPropagation()}>
+        <div className="modal-t">Оценить работу</div>
+        <div className="modal-sub">{submission.student_name}</div>
+
+        {/* Ответ ученика */}
+        {submission.text_answer && (
+          <div style={{marginBottom:16,padding:12,background:'var(--surface2)',borderRadius:8}}>
+            <div style={{fontSize:11,fontWeight:600,color:'var(--muted)',marginBottom:6}}>Текстовый ответ:</div>
+            <div style={{fontSize:13,lineHeight:1.6,maxHeight:120,overflow:'auto'}}>{submission.text_answer}</div>
+          </div>
+        )}
+
+        {/* Файлы */}
+        {submission.file_name && (
+          <div style={{marginBottom:16}}>
+            <a href={`/uploads/${submission.file_path}`} target="_blank" className="btn btn-s btn-sm">
+              📎 {submission.file_name}
+            </a>
+          </div>
+        )}
+
+        {/* Кнопки оценки */}
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:10}}>Выберите оценку:</div>
+          <div style={{
+            display:'grid',
+            gridTemplateColumns: gradingScale === '10-point' ? 'repeat(5, 1fr)' : 'repeat(10, 1fr)',
+            gap:8
+          }}>
+            {buttons.map(score => (
+              <button
+                key={score}
+                type="button"
+                style={{
+                  aspectRatio: gradingScale === '10-point' ? '1' : 'auto',
+                  padding: gradingScale === '10-point' ? 0 : '8px 6px',
+                  borderRadius: 10,
+                  border: `2px solid ${selectedScore === score ? 'transparent' : 'var(--border)'}`,
+                  background: selectedScore === score ? getGradeColor(score, gradingScale) : 'var(--surface)',
+                  color: selectedScore === score ? '#fff' : 'var(--text)',
+                  fontSize: gradingScale === '10-point' ? 20 : 13,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                  transform: selectedScore === score ? 'scale(1.1)' : 'scale(1)'
+                }}
+                onClick={() => setSelectedScore(score)}
+                onMouseOver={e => {
+                  if (selectedScore !== score) {
+                    e.target.style.borderColor = getGradeColor(score, gradingScale);
+                    e.target.style.transform = 'scale(1.05)';
+                  }
+                }}
+                onMouseOut={e => {
+                  if (selectedScore !== score) {
+                    e.target.style.borderColor = 'var(--border)';
+                    e.target.style.transform = 'scale(1)';
+                  }
+                }}
+              >
+                {score}
+              </button>
+            ))}
+          </div>
+
+          {/* Preview оценки */}
+          {selectedScore !== null && (
+            <div style={{
+              marginTop:12,
+              textAlign:'center',
+              fontSize:18,
+              fontWeight:700,
+              color:getGradeColor(selectedScore, gradingScale)
+            }}>
+              {getGradeIcon(selectedScore, gradingScale)} {selectedScore}/{maxScore} — {getGradeLabel(selectedScore, gradingScale)}
+              {gradingScale === '10-point' && (
+                <div style={{fontSize:20,marginTop:6}}>
+                  {generateStars(selectedScore, maxScore)}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Комментарий */}
+        <div className="fg">
+          <label className="fl">💬 Комментарий для ученика</label>
+          <textarea
+            className="fi"
+            rows={4}
+            value={feedback}
+            onChange={e => setFeedback(e.target.value)}
+            placeholder="Напишите свой комментарий..."
+          />
+        </div>
+
+        {/* Кнопки */}
+        <div style={{display:'flex',gap:8,marginTop:16}}>
+          <button
+            className="btn btn-p"
+            style={{flex:1}}
+            onClick={handleSubmit}
+            disabled={loading || selectedScore === null}
+          >
+            {loading ? 'Сохранение...' : '💾 Выставить оценку'}
+          </button>
+          <button className="btn btn-s" onClick={onClose}>Отмена</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ·· ASSIGNMENTS VIEW
+function AssignmentsView({ user }) {
+  const { data: classes } = useApi(() => API.get('/api/classes'));
+  const [classFilter, setClassFilter] = useState('');
+  const url = '/api/assignments' + (classFilter ? `?classId=${classFilter}` : '');
+  const { data: assignments, loading, reload } = useApi(() => API.get(url), [url]);
+  const canCreate = ['teacher','center_admin','super_admin'].includes(user.role);
+  const isTeacher = user.role === 'teacher';
+  const [showCreate, setShowCreate] = useState(false);
+  const [form, setForm] = useState({ classId:'', title:'', description:'', type:'homework', gradingScale:'10-point', maxScore:10, dueDate:'', isPublished:1 });
+  const [err, setErr] = useState('');
+  const [viewAssign, setViewAssign] = useState(null);
+  const [subs, setSubs] = useState(null);
+  const [gradingSubmission, setGradingSubmission] = useState(null); // Для GradeModal
+  const toast = useToast();
+  const confirm = useConfirm();
+
+  async function create(e) {
+    e.preventDefault(); setErr('');
+    try {
+      await API.post('/api/assignments', form);
+      reload(); setShowCreate(false); setForm({ classId:'', title:'', description:'', type:'homework', gradingScale:'10-point', maxScore:10, dueDate:'', isPublished:1 });
+      toast('Задание создано', 'success');
+    } catch(ex) { setErr(ex.message); }
+  }
+
+  async function deleteAssign(id) {
+    const ok = await confirm('Задание и все работы учеников будут удалены безвозвратно. Это действие нельзя отменить.', 'Удалить задание?', { icon: '🗑️', danger: true, confirmText: 'Удалить' });
+    if (!ok) return;
+    try { await API.del(`/api/assignments/${id}`); reload(); toast('Задание удалено', 'success'); } catch(ex) { alert(ex.message); }
+  }
+
+  async function viewSubmissions(a) {
+    setViewAssign(a);
+    try { const d = await API.get(`/api/submissions/assignment/${a.id}`); setSubs(d); } catch(ex) { alert(ex.message); }
+  }
+
+  async function gradeSubmission(subId, score, feedback) {
+    try {
+      await API.patch(`/api/submissions/${subId}/grade`, { score: parseFloat(score), feedback });
+      viewSubmissions(viewAssign);
+      toast('Оценка выставлена', 'success');
+      setGradingSubmission(null); // Закрыть модалку
+    } catch(ex) {
+      alert(ex.message);
+      throw ex; // Пробросить ошибку для GradeModal
+    }
+  }
+
+  function openGradeModal(submission) {
+    setGradingSubmission(submission);
+  }
+
+  async function returnSubmission(subId) {
+    const feedback = prompt('Комментарий для ученика:');
+    if (feedback === null) return;
+    try { await API.patch(`/api/submissions/${subId}/return`, { feedback }); viewSubmissions(viewAssign); toast('Работа возвращена', 'success'); } catch(ex) { alert(ex.message); }
+  }
+
+  // Student submit
+  async function submitWork(assignmentId) {
+    const answer = prompt('Введите текстовый ответ:');
+    if (!answer) return;
+    try { await API.post(`/api/submissions/${assignmentId}`, { textAnswer: answer }); reload(); toast('Работа сдана!', 'success'); } catch(ex) { alert(ex.message); }
+  }
+
+  if (loading) return <Spinner/>;
+
+  if (viewAssign && subs) {
+    return (
+      <div className="fade">
+        <button className="btn btn-s btn-sm" style={{marginBottom:14}} onClick={()=>{setViewAssign(null);setSubs(null);}}>← Назад</button>
+        <div className="ph"><div className="pt">{viewAssign.title}</div><div className="ps">{viewAssign.class_name} · до {fmtDate(viewAssign.due_date)} · Макс: {viewAssign.max_score}</div></div>
+        {viewAssign.description && <div className="card" style={{padding:'12px 16px',marginBottom:14,fontSize:13,color:'var(--muted)'}}>{viewAssign.description}</div>}
+        <div className="card">
+          <div className="ch"><div className="ct">Сданные работы ({subs.submissions?.length||0})</div></div>
+          <div className="cb" style={{padding:0}}>
+            <table className="tbl">
+              <thead><tr><th>Ученик</th><th>Ответ</th><th>Файл</th><th>Дата</th><th>Балл</th><th>Статус</th><th>Действия</th></tr></thead>
+              <tbody>
+                {(subs.submissions||[]).map(s=>(
+                  <tr key={s.id}>
+                    <td style={{fontWeight:600}}>{s.student_name}</td>
+                    <td style={{maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:11}}>{s.text_answer||'—'}</td>
+                    <td>{s.file_name ? <a href={`/uploads/${s.file_path}`} target="_blank" style={{color:'var(--accent)',fontSize:11}}>📎 {s.file_name}</a> : '—'}</td>
+                    <td style={{fontSize:11,color:'var(--muted)'}}>{fmtDate(s.submitted_at)}</td>
+                    <td>
+                      {s.score!==null ? (
+                        <span style={{
+                          fontWeight:700,
+                          color:getGradeColor(s.score, viewAssign.grading_scale),
+                          fontSize:13
+                        }}>
+                          {getGradeIcon(s.score, viewAssign.grading_scale)} {s.score}/{viewAssign.max_score}
+                        </span>
+                      ) : '—'}
+                    </td>
+                    <td><span className={`bdg ${s.status==='graded'?'bg':s.status==='submitted'?'ba':s.status==='returned'?'br':'bk'}`}>{s.status==='graded'?'Проверено':s.status==='submitted'?'Сдано':s.status==='returned'?'Возвращено':'—'}</span></td>
+                    <td>
+                      {s.status==='submitted' && <>
+                        <button className="btn btn-p btn-sm" style={{marginRight:4}} onClick={()=>openGradeModal(s)}>✓ Оценить</button>
+                        <button className="btn btn-d btn-sm" onClick={()=>returnSubmission(s.id)}>↩</button>
+                      </>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {subs.notSubmitted?.length>0 && (
+          <div style={{marginTop:14}}>
+            <div style={{fontSize:12,fontWeight:600,color:'var(--muted)',marginBottom:6}}>Не сдали ({subs.notSubmitted.length}):</div>
+            <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+              {subs.notSubmitted.map(s=><span key={s.id} className="bdg br">{s.name}</span>)}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="fade">
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+        <div><div className="pt">Задания</div><div className="ps">{canCreate?'Управление заданиями':'Ваши задания'}</div></div>
+        {canCreate && <button className="btn btn-p" onClick={()=>setShowCreate(true)}>+ Создать задание</button>}
+      </div>
+      {classes?.length>1 && (
+        <div style={{marginBottom:14}}>
+          <select className="fi" style={{maxWidth:280}} value={classFilter} onChange={e=>setClassFilter(e.target.value)}>
+            <option value="">Все классы</option>
+            {(classes||[]).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+      )}
+      <div style={{display:'flex',flexDirection:'column',gap:10}}>
+        {(assignments||[]).map(a=>(
+          <div className="ac" key={a.id} onClick={()=>canCreate?viewSubmissions(a):null}>
+            <div style={{display:'flex',alignItems:'center',gap:12}}>
+              <div style={{width:40,height:40,borderRadius:10,background:typeBg(a.type),display:'flex',alignItems:'center',justifyContent:'center',fontSize:18}}>{typeIco(a.type)}</div>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:13}}>{a.title}</div>
+                <div style={{fontSize:11,color:'var(--muted)'}}>
+                  {a.class_name} · {relativeDate(a.due_date)} · Макс: {a.max_score} {a.grading_scale==='10-point'?'(10-бальная)':'(100-бальная)'}
+                </div>
+              </div>
+              {canCreate && <div style={{textAlign:'right',fontSize:11}}>
+                <div>{a.submission_count||0}/{a.total_students||0} сдали</div>
+                {a.pending_grading>0 && <span className="bdg ba">{a.pending_grading} ждут</span>}
+              </div>}
+              {user.role==='student' && (
+                a.submission_status
+                  ? (a.submission_status==='graded'
+                      ? <div style={{
+                          display:'flex',
+                          alignItems:'center',
+                          gap:6,
+                          padding:'6px 12px',
+                          background:getGradeColor(a.score, a.grading_scale)+'15',
+                          border:`2px solid ${getGradeColor(a.score, a.grading_scale)}`,
+                          borderRadius:8,
+                          fontWeight:700,
+                          fontSize:14,
+                          color:getGradeColor(a.score, a.grading_scale)
+                        }}>
+                          <span>{getGradeIcon(a.score, a.grading_scale)}</span>
+                          <span>{a.score}/{a.max_score}</span>
+                        </div>
+                      : <span className={`bdg ${a.submission_status==='submitted'?'ba':a.submission_status==='returned'?'br':'bk'}`}>
+                          {a.submission_status==='submitted'?'Сдано':a.submission_status==='returned'?'Возвращено':'—'}
+                        </span>
+                    )
+                  : <button className="btn btn-p btn-sm" onClick={e=>{e.stopPropagation();submitWork(a.id);}}>Сдать</button>
+              )}
+              {canCreate && <button className="btn btn-d btn-sm" onClick={e=>{e.stopPropagation();deleteAssign(a.id);}}>🗑</button>}
+            </div>
+          </div>
+        ))}
+      </div>
+      {(!assignments||!assignments.length)&&<div className="empty"><div className="empty-ico">📋</div>Нет заданий</div>}
+      {showCreate && (
+        <Modal title="Создать задание" onClose={()=>setShowCreate(false)}>
+          <Alert msg={err}/>
+          <form onSubmit={create}>
+            <div className="fg"><label className="fl">Класс</label>
+              <select className="fi" required value={form.classId} onChange={e=>setForm(f=>({...f,classId:parseInt(e.target.value)}))}>
+                <option value="">— выберите —</option>
+                {(classes||[]).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div className="fg"><label className="fl">Название</label><input className="fi" required value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} placeholder="Контрольная №1"/></div>
+            <div className="fg"><label className="fl">Описание</label><textarea className="fi" rows={3} value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))}/></div>
+            <div className="g2">
+              <div className="fg"><label className="fl">Тип</label>
+                <select className="fi" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))}>
+                  <option value="homework">Домашка</option><option value="test">Тест</option>
+                  <option value="essay">Эссе</option><option value="lab">Лабораторная</option>
+                  <option value="project">Проект</option>
+                </select>
+              </div>
+              <div className="fg"><label className="fl">Срок сдачи</label><input className="fi" type="date" required value={form.dueDate} onChange={e=>setForm(f=>({...f,dueDate:e.target.value}))}/></div>
+            </div>
+            <div className="fg">
+              <label className="fl">Шкала оценивания</label>
+              <div style={{display:'flex',gap:16,padding:'8px 0'}}>
+                <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer'}}>
+                  <input
+                    type="radio"
+                    name="gradingScale"
+                    value="10-point"
+                    checked={form.gradingScale === '10-point'}
+                    onChange={e => setForm(f=>({...f, gradingScale:'10-point', maxScore:10}))}
+                  />
+                  <span style={{fontWeight:600}}>10-бальная</span>
+                  <span style={{fontSize:11,color:'var(--muted)'}}>(1-10)</span>
+                </label>
+                <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer'}}>
+                  <input
+                    type="radio"
+                    name="gradingScale"
+                    value="100-point"
+                    checked={form.gradingScale === '100-point'}
+                    onChange={e => setForm(f=>({...f, gradingScale:'100-point', maxScore:100}))}
+                  />
+                  <span style={{fontWeight:600}}>100-бальная</span>
+                  <span style={{fontSize:11,color:'var(--muted)'}}>(0-100)</span>
+                </label>
+              </div>
+            </div>
+            <div style={{display:'flex',gap:8,marginTop:14}}>
+              <button type="submit" className="btn btn-p" style={{flex:1}}>Создать</button>
+              <button type="button" className="btn btn-s" onClick={()=>setShowCreate(false)}>Отмена</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* GradeModal для выставления оценок */}
+      {gradingSubmission && viewAssign && (
+        <GradeModal
+          submission={gradingSubmission}
+          assignment={viewAssign}
+          onGrade={gradeSubmission}
+          onClose={() => setGradingSubmission(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ·· GRADEBOOK VIEW (teacher / admin)
+function GradebookView({ user }) {
+  const { data: classes, loading: clsLoading } = useApi(() => API.get('/api/classes'));
+  const [selClass, setSelClass] = useState('');
+  const classId = selClass || (classes?.[0]?.id);
+  const { data: gb, loading, reload } = useApi(() => classId ? API.get(`/api/grades/class/${classId}`) : Promise.resolve(null), [classId]);
+  const toast = useToast();
+
+  async function updateScore(subId, assignId, studentId, score, maxScore) {
+    if (subId) {
+      try { await API.patch(`/api/submissions/${subId}/grade`, { score: parseFloat(score) }); reload(); toast('Оценка обновлена','success'); } catch(ex) { alert(ex.message); }
+    }
+  }
+
+  if (clsLoading) return <Spinner/>;
+  if (!classes?.length) return <div className="fade"><div className="empty"><div className="empty-ico">📊</div>Нет классов</div></div>;
+
+  return (
+    <div className="fade">
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+        <div><div className="pt">Журнал оценок</div><div className="ps">Электронный классный журнал</div></div>
+        {classId && <a href={`/api/grades/class/${classId}/export`} className="btn btn-s">📥 CSV</a>}
+      </div>
+      <div style={{marginBottom:14}}>
+        <select className="fi" style={{maxWidth:280}} value={classId||''} onChange={e=>setSelClass(parseInt(e.target.value))}>
+          {(classes||[]).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      </div>
+      {loading ? <Spinner/> : gb ? (
+        <div className="card" style={{overflowX:'auto'}}>
+          <div className="cb" style={{padding:0}}>
+            <table className="tbl" style={{fontSize:11}}>
+              <thead>
+                <tr>
+                  <th style={{position:'sticky',left:0,background:'var(--surface2)',zIndex:1}}>Ученик</th>
+                  {(gb.assignments||[]).map(a=><th key={a.id} style={{textAlign:'center',maxWidth:80,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={a.title}>{a.title}</th>)}
+                  <th style={{textAlign:'center'}}>Итог</th>
+                  <th style={{textAlign:'center'}}>Оценка</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(gb.matrix||[]).map((row,i)=>(
+                  <tr key={i}>
+                    <td style={{fontWeight:600,position:'sticky',left:0,background:'#fff',zIndex:1}}>{row.student.name}</td>
+                    {row.scores.map((s,j)=>(
+                      <td key={j} style={{textAlign:'center'}}>
+                        {s ? <span style={{fontWeight:700,color:gColor((s.score/gb.assignments[j].max_score)*100)}}>{s.score!==null?s.score:'—'}</span> : <span style={{color:'#d1d5db'}}>·</span>}
+                      </td>
+                    ))}
+                    <td style={{textAlign:'center',fontWeight:700}}>{row.pct!==null?`${row.pct}%`:'—'}</td>
+                    <td style={{textAlign:'center'}}>{row.letter ? <span className="gc" style={{width:30,height:30,fontSize:12,display:'inline-flex',background:gBg(row.pct),color:gColor(row.pct)}}>{row.letter}</span> : '—'}</td>
+                  </tr>
+                ))}
+                {(!gb.matrix||!gb.matrix.length)&&<tr><td colSpan={99}><div className="empty">Нет данных</div></td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : <div className="empty">Выберите класс</div>}
+    </div>
+  );
+}
+
+// ·· NOTIFICATIONS PAGE (full page view)
+function NotificationsPage({ onRead }) {
+  const { data, loading, reload } = useApi(() => API.get('/api/notifications'));
+  const notifs = data?.notifs || [];
+  async function readAll() { await API.patch('/api/notifications/read-all'); reload(); if(onRead) onRead(); }
+  async function del(id) { await API.del(`/api/notifications/${id}`); reload(); if(onRead) onRead(); }
+  async function markRead(id) { await API.patch(`/api/notifications/${id}/read`); reload(); if(onRead) onRead(); }
+
+  return (
+    <div className="fade">
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+        <div><div className="pt">Уведомления</div><div className="ps">Все ваши уведомления</div></div>
+        {notifs.length>0 && <button className="btn btn-s" onClick={readAll}>Прочитать все</button>}
+      </div>
+      {loading ? <Spinner/> : notifs.length===0 ? <div className="empty"><div className="empty-ico">🔔</div>Нет уведомлений</div> : (
+        <div style={{display:'flex',flexDirection:'column',gap:8}}>
+          {notifs.map(n=>(
+            <div key={n.id} className="card" style={{padding:'12px 16px',opacity:n.is_read?0.7:1,borderLeft:n.is_read?'':'3px solid var(--accent)',cursor:'pointer'}} onClick={()=>markRead(n.id)}>
+              <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
+                <span style={{fontSize:18}}>{n.type==='success'?'✅':n.type==='warning'?'⚠️':n.type==='error'?'❌':'ℹ️'}</span>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700,fontSize:13}}>{n.title}</div>
+                  <div style={{fontSize:12,color:'var(--muted)',marginTop:2}}>{n.body}</div>
+                  <div style={{fontSize:10,color:'var(--muted)',marginTop:4}}>{fmtDate(n.created_at)}</div>
+                </div>
+                <button className="btn btn-d btn-sm" onClick={e=>{e.stopPropagation();del(n.id);}}>✕</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ·· PROFILE PAGE
+function ProfilePage({ user, onLogout, onNameChange }) {
+  const [name, setName] = useState(user.name);
+  const [saving, setSaving] = useState(false);
+  const [pwForm, setPwForm] = useState({ currentPassword:'', newPassword:'' });
+  const [pwErr, setPwErr] = useState('');
+  const [pwOk, setPwOk] = useState(false);
+  const toast = useToast();
+
+  async function saveName(e) {
+    e.preventDefault(); setSaving(true);
+    try { await API.patch('/api/users/me', { name }); if(onNameChange) onNameChange(name); toast('Имя обновлено','success'); } catch(ex) { alert(ex.message); }
+    setSaving(false);
+  }
+
+  async function changePassword(e) {
+    e.preventDefault(); setPwErr(''); setPwOk(false);
+    try { await API.patch('/api/auth/password', pwForm); setPwOk(true); setPwForm({currentPassword:'',newPassword:''}); toast('Пароль изменён','success'); } catch(ex) { setPwErr(ex.message); }
+  }
+
+  return (
+    <div className="fade">
+      <div className="ph"><div className="pt">Профиль</div><div className="ps">Настройки аккаунта</div></div>
+      <div className="g2">
+        <div className="card" style={{padding:'18px'}}>
+          <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:18}}>
+            <div className="ava" style={{width:56,height:56,fontSize:20,background:avaColor(user.role)}}>{initials(user.name)}</div>
+            <div>
+              <div style={{fontWeight:800,fontSize:16}}>{user.name}</div>
+              <div style={{fontSize:12,color:'var(--muted)'}}>{user.email}</div>
+              <span className="bdg bp" style={{marginTop:4}}>{roleLabel[user.role]}</span>
+            </div>
+          </div>
+          <form onSubmit={saveName}>
+            <div className="fg"><label className="fl">Имя</label><input className="fi" value={name} onChange={e=>setName(e.target.value)} required/></div>
+            <button type="submit" className="btn btn-p" disabled={saving} style={{width:'100%',justifyContent:'center'}}>{saving?'...':'Сохранить имя'}</button>
+          </form>
+        </div>
+        <div className="card" style={{padding:'18px'}}>
+          <div style={{fontWeight:700,fontSize:14,marginBottom:14}}>🔒 Сменить пароль</div>
+          <Alert msg={pwErr}/>
+          {pwOk && <div style={{background:'var(--green-s)',border:'1px solid #a7f3d0',borderRadius:8,padding:'8px 12px',fontSize:12,color:'#059669',marginBottom:12}}>✅ Пароль успешно изменён</div>}
+          <form onSubmit={changePassword}>
+            <div className="fg"><label className="fl">Текущий пароль</label><input className="fi" type="password" required value={pwForm.currentPassword} onChange={e=>setPwForm(f=>({...f,currentPassword:e.target.value}))}/></div>
+            <div className="fg"><label className="fl">Новый пароль</label><input className="fi" type="password" required minLength={8} value={pwForm.newPassword} onChange={e=>setPwForm(f=>({...f,newPassword:e.target.value}))} placeholder="Минимум 8 символов"/></div>
+            <button type="submit" className="btn btn-p" style={{width:'100%',justifyContent:'center'}}>Сменить пароль</button>
+          </form>
+        </div>
+      </div>
+      <div style={{marginTop:24,textAlign:'center'}}>
+        <button className="btn btn-d" onClick={async()=>{await API.logout();onLogout();}}>🚪 Выйти из аккаунта</button>
+      </div>
+    </div>
+  );
+}
+
+// ·· USERS VIEW (admin)
+function UsersView({ user }) {
+  const [tab, setTab] = useState('student');
+  const isSuperAdmin = user.role === 'super_admin';
+  const { data: centers } = useApi(() => isSuperAdmin ? API.get('/api/centers') : Promise.resolve(null));
+  const [centerId, setCenterId] = useState(null);
+  const effectiveCenterId = isSuperAdmin ? (centerId || centers?.[0]?.id) : null;
+  const queryStr = isSuperAdmin && effectiveCenterId ? `/api/users?role=${tab}&centerId=${effectiveCenterId}` : `/api/users?role=${tab}`;
+  const { data: users, loading, reload } = useApi(() => {
+    if (isSuperAdmin && !effectiveCenterId) return Promise.resolve([]);
+    return API.get(queryStr);
+  }, [tab, effectiveCenterId]);
+  const { data: students } = useApi(() => {
+    if (isSuperAdmin && !effectiveCenterId) return Promise.resolve([]);
+    return API.get(isSuperAdmin ? `/api/users?role=student&centerId=${effectiveCenterId}` : '/api/users?role=student');
+  }, [effectiveCenterId]);
+  const [linkParent, setLinkParent] = useState(null); // parent user object
+  const [linkStudentId, setLinkStudentId] = useState('');
+  const [linkErr, setLinkErr] = useState('');
+  const [search, setSearch] = useState('');
+  const [resetUser, setResetUser] = useState(null);
+  const [resetPw, setResetPw] = useState('');
+  const [resetErr, setResetErr] = useState('');
+  const [resetOk, setResetOk] = useState(false);
+
+  async function handleResetPassword(e) {
+    e.preventDefault(); setResetErr(''); setResetOk(false);
+    if (!resetPw || resetPw.length < 8) return setResetErr('Минимум 8 символов');
+    try {
+      await API.post(`/api/users/${resetUser.id}/reset-password`, { newPassword: resetPw });
+      setResetOk(true);
+    } catch(ex) { setResetErr(ex.message); }
+  }
+
+  async function addChild(e) {
+    e.preventDefault(); setLinkErr('');
+    try {
+      await API.post(`/api/users/${linkParent.id}/children`, { studentId: parseInt(linkStudentId) });
+      setLinkParent(null); setLinkStudentId('');
+    } catch(ex) { setLinkErr(ex.message); }
+  }
+
+  return (
+    <div className="fade">
+      <div className="ph"><div className="pt">Пользователи</div></div>
+      {isSuperAdmin && centers?.length > 0 && (
+        <div style={{marginBottom:14,display:'flex',alignItems:'center',gap:10}}>
+          <label style={{fontSize:12,fontWeight:600,color:'var(--muted)'}}>Центр:</label>
+          <select className="fi" style={{width:280}} value={effectiveCenterId||''} onChange={e=>setCenterId(parseInt(e.target.value))}>
+            {centers.map(c=><option key={c.id} value={c.id}>{c.name} ({c.code})</option>)}
+          </select>
+        </div>
+      )}
+      <div className="tabs">
+        {['student','teacher','parent','center_admin'].map(r=>(
+          <button key={r} className={`tab ${tab===r?'active':''}`} onClick={()=>setTab(r)}>{rolePlural[r]}</button>
+        ))}
+      </div>
+      <div style={{marginBottom:14}}>
+        <input className="fi" style={{maxWidth:320}} placeholder="🔍 Поиск по имени или email..." value={search} onChange={e=>setSearch(e.target.value)}/>
+      </div>
+      {loading ? <Spinner/> : (
+        <div className="card">
+          <div className="cb" style={{padding:0}}>
+            <table className="tbl">
+              <thead><tr><th>Имя</th><th>Email</th><th>Роль</th><th>Статус</th><th>Создан</th>{tab==='parent'&&<th>Дети</th>}<th style={{width:80}}>Действия</th></tr></thead>
+              <tbody>
+                {(users||[]).filter(u => {
+                  if (!search.trim()) return true;
+                  const q = search.toLowerCase();
+                  return u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+                }).map(u=>(
+                  <tr key={u.id}>
+                    <td><div style={{display:'flex',alignItems:'center',gap:8}}>
+                      <div className="ava" style={{width:28,height:28,fontSize:11,background:avaColor(u.role)}}>{initials(u.name)}</div>
+                      <span style={{fontWeight:600}}>{u.name}</span>
+                    </div></td>
+                    <td style={{color:'var(--muted)',fontSize:12}}>{u.email}</td>
+                    <td><span className={`bdg ${u.role==='teacher'?'bp':u.role==='student'?'bg':u.role==='parent'?'ba':'bb'}`}>{roleLabel[u.role]}</span></td>
+                    <td><span className={`bdg ${u.is_active?'bg':'br'}`}>{u.is_active?'Активен':'Заблокирован'}</span></td>
+                    <td style={{fontSize:11,color:'var(--muted)'}}>{fmtDate(u.created_at)}</td>
+                    {tab==='parent'&&<td><button className="btn btn-sm btn-s" onClick={()=>{setLinkParent(u);setLinkStudentId('');setLinkErr('');}}>+ Ребёнок</button></td>}
+                    <td><button className="btn btn-sm btn-s" onClick={()=>{setResetUser(u);setResetPw('');setResetErr('');setResetOk(false);}} title="Сбросить пароль">🔑</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {(!users||!users.length)&&<div className="empty"><div className="empty-ico">👥</div>Нет пользователей</div>}
+          </div>
+        </div>
+      )}
+      {linkParent && (
+        <Modal title={`👶 Привязать ребёнка к ${linkParent.name}`} onClose={()=>setLinkParent(null)}>
+          <Alert msg={linkErr}/>
+          <p style={{fontSize:13,color:'var(--muted)',marginBottom:12}}>Выберите ученика, которого хотите привязать к этому родителю. После этого родитель сможет видеть оценки, посещаемость и задания ребёнка.</p>
+          <form onSubmit={addChild}>
+            <div className="fg"><label className="fl">Ученик</label>
+              <select className="fi" required value={linkStudentId} onChange={e=>setLinkStudentId(e.target.value)}>
+                <option value="">— выберите ученика —</option>
+                {(students||[]).map(s=><option key={s.id} value={s.id}>{s.name} ({s.email})</option>)}
+              </select>
+            </div>
+            <div style={{display:'flex',gap:8,marginTop:14}}>
+              <button type="submit" className="btn btn-p" style={{flex:1}}>Привязать</button>
+              <button type="button" className="btn btn-s" onClick={()=>setLinkParent(null)}>Отмена</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {resetUser && (
+        <Modal title={`🔑 Сбросить пароль: ${resetUser.name}`} onClose={()=>setResetUser(null)}>
+          <Alert msg={resetErr}/>
+          {resetOk ? (
+            <div>
+              <div style={{background:'var(--green-s)',border:'1px solid #a7f3d0',borderRadius:8,padding:'10px 12px',fontSize:12,color:'#059669',marginBottom:12}}>✅ Пароль успешно изменён</div>
+              <div style={{fontSize:13,marginBottom:12}}>Новый пароль для <b>{resetUser.name}</b>:</div>
+              <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:15,fontWeight:700,background:'#fff',border:'1px solid var(--border)',borderRadius:6,padding:'8px 12px',marginTop:8,letterSpacing:1,textAlign:'center',userSelect:'all'}}>{resetPw}</div>
+              <div style={{fontSize:11,color:'var(--muted)',marginTop:6}}>Передайте этот пароль пользователю. Все его сессии были завершены.</div>
+            </div>
+          ) : (
+            <form onSubmit={handleResetPassword}>
+              <p style={{fontSize:13,color:'var(--muted)',marginBottom:12}}>Введите новый временный пароль. Все текущие сессии пользователя будут завершены.</p>
+              <div className="fg"><label className="fl">Новый пароль</label>
+                <input className="fi" type="text" required minLength={8} value={resetPw} onChange={e=>setResetPw(e.target.value)} placeholder="Минимум 8 символов"/>
+              </div>
+              <div style={{display:'flex',gap:8,marginTop:14}}>
+                <button type="submit" className="btn btn-p" style={{flex:1}}>Сбросить пароль</button>
+                <button type="button" className="btn btn-s" onClick={()=>setResetUser(null)}>Отмена</button>
+              </div>
+            </form>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function NotifPanel({ onClose, onRead }) {
+  const { data: notifData, loading, reload } = useApi(() => API.get('/api/notifications'));
+  const notifs = notifData?.notifs || [];
+  async function readAll() {
+    await API.patch('/api/notifications/read-all');
+    reload(); if (onRead) onRead();
+  }
+  function markRead(id) {
+    API.patch(`/api/notifications/${id}/read`).then(()=>{ reload(); if (onRead) onRead(); });
+  }
+  function del(id, e) {
+    e.stopPropagation();
+    API.del(`/api/notifications/${id}`).then(()=>{ reload(); if (onRead) onRead(); });
+  }
+  return (
+    <div className="np" onClick={e=>e.stopPropagation()}>
+      <div style={{padding:'10px 14px',borderBottom:'1px solid var(--border)',fontWeight:700,fontSize:13,display:'flex',justifyContent:'space-between'}}>
+        Уведомления
+        <span style={{fontSize:11,color:'var(--accent)',cursor:'pointer',fontWeight:600}} onClick={readAll}>Прочитать все</span>
+      </div>
+      {loading ? <div style={{padding:20,textAlign:'center',fontSize:12,color:'var(--muted)'}}>...</div> :
+        (notifs||[]).length===0 ? <div style={{padding:20,textAlign:'center',fontSize:12,color:'var(--muted)'}}>Нет уведомлений</div> :
+        (notifs||[]).map(n=>(
+          <div key={n.id} className={`ni ${!n.is_read?'unread':''}`} onClick={()=>markRead(n.id)}>
+            <span style={{fontSize:16}}>{n.type==='success'?'✅':n.type==='warning'?'⚠️':n.type==='error'?'❌':'ℹ️'}</span>
+            <div style={{flex:1,minWidth:0}}><div style={{fontSize:12,fontWeight:600}}>{n.title}</div><div style={{fontSize:11,color:'var(--muted)',marginTop:1}}>{n.body}</div></div>
+            <span style={{fontSize:11,cursor:'pointer',color:'var(--muted)',padding:'2px 4px',borderRadius:4,flexShrink:0}} onClick={e=>del(n.id,e)} title="Удалить">✕</span>
+          </div>
+        ))
+      }
+    </div>
+  );
+}
+
+// ·· SCHEDULE VIEW
+function ScheduleView({ user }) {
+  const DAY_NAMES = ['','Пн','Вт','Ср','Чт','Пт','Сб'];
+  const DAY_FULL = ['','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота'];
+  const { data: children } = useApi(() => user.role==='parent' ? API.get('/api/users/me/children') : Promise.resolve(null));
+  const [childId, setChildId] = useState(null);
+  const effectiveChildId = user.role==='parent' ? (childId || children?.[0]?.id) : null;
+  const schedUrl = user.role==='parent' && effectiveChildId ? `/api/schedule?studentId=${effectiveChildId}` : '/api/schedule';
+  const { data, loading, reload } = useApi(() => {
+    if (user.role==='parent' && !effectiveChildId) return Promise.resolve({ schedules: [], byDay: {} });
+    return API.get(schedUrl);
+  }, [schedUrl, effectiveChildId]);
+  const { data: classes } = useApi(() => ['teacher','center_admin','super_admin'].includes(user.role) ? API.get('/api/classes') : Promise.resolve(null));
+  const [showCreate, setShowCreate] = useState(false);
+  const [form, setForm] = useState({ classId:'', dayOfWeek:1, startTime:'08:30', endTime:'09:15', room:'' });
+  const [err, setErr] = useState('');
+  const toast = useToast();
+  const confirm = useConfirm();
+  const canManage = ['teacher','center_admin','super_admin'].includes(user.role);
+  const set = k => e => setForm(p=>({...p,[k]:e.target.value}));
+
+  // Collect all unique time slots across the schedule
+  const allSlots = (data?.schedules || []).map(s => s.start_time).filter((v,i,a)=>a.indexOf(v)===i).sort();
+
+  async function create(e) {
+    e.preventDefault(); setErr('');
+    try {
+      await API.post('/api/schedule', {...form, classId:parseInt(form.classId), dayOfWeek:parseInt(form.dayOfWeek)});
+      reload(); setShowCreate(false); toast('Урок добавлен в расписание', 'success');
+    } catch(ex) { setErr(ex.message); }
+  }
+
+  async function deleteEntry(id) {
+    const ok = await confirm('Урок будет удалён из расписания. Это не повлияет на посещаемость и оценки.', 'Удалить урок из расписания?', { icon: '🗓️', danger: true, confirmText: 'Удалить' });
+    if (!ok) return;
+    try { await API.del(`/api/schedule/${id}`); reload(); toast('Удалено', 'success'); }
+    catch(ex) { toast(ex.message, 'error'); }
+  }
+
+  if (loading) return <Spinner/>;
+
+  return (
+    <div className="fade">
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+        <div><div className="pt">Расписание</div><div className="ps">{data?.schedules?.length || 0} уроков в неделю</div></div>
+        {canManage && <button className="btn btn-p" onClick={()=>setShowCreate(true)}>+ Добавить урок</button>}
+      </div>
+      {user.role==='parent' && children?.length>1 && (
+        <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap'}}>
+          {children.map(c=><button key={c.id} className={`btn ${effectiveChildId===c.id?'btn-p':'btn-s'}`} onClick={()=>setChildId(c.id)}>{c.name}</button>)}
+        </div>
+      )}
+
+      {/* Weekly grid */}
+      <div className="card" style={{overflow:'auto'}}>
+        <div className="cb" style={{padding:0}}>
+          <div className="sched-grid">
+            <div className="sched-header">Время</div>
+            {[1,2,3,4,5,6].map(d=><div className="sched-header" key={d}>{DAY_NAMES[d]}</div>)}
+            {allSlots.length === 0 && (
+              <>
+                <div className="sched-time">—</div>
+                {[1,2,3,4,5,6].map(d=><div className="sched-cell" key={d}/>)}
+              </>
+            )}
+            {allSlots.map(time => (
+              <React.Fragment key={time}>
+                <div className="sched-time">{time}</div>
+                {[1,2,3,4,5,6].map(d => {
+                  const items = (data?.byDay?.[d] || []).filter(s => s.start_time === time);
+                  return (
+                    <div className="sched-cell" key={d}>
+                      {items.map(s => (
+                        <div key={s.id} className="sched-item" style={{borderLeftColor:s.color||'var(--accent)',background:(s.color||'#6366f1')+'18'}}
+                          onClick={()=>canManage && deleteEntry(s.id)} title={canManage?'Нажмите чтобы удалить':''}>
+                          <div style={{fontWeight:700,fontSize:11}}>{s.class_name}</div>
+                          <div style={{fontSize:10,color:'var(--muted)'}}>{s.start_time}-{s.end_time}{s.room?` · ${s.room}`:''}</div>
+                          {s.teacher_name && <div style={{fontSize:10,color:'var(--muted)'}}>{s.teacher_name}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Mobile-friendly list */}
+      <div style={{marginTop:16}}>
+        {[1,2,3,4,5,6].map(d => {
+          const items = data?.byDay?.[d] || [];
+          if (!items.length) return null;
+          return (
+            <div key={d} style={{marginBottom:12}}>
+              <div style={{fontWeight:700,fontSize:13,marginBottom:6,color:'var(--muted)'}}>{DAY_FULL[d]}</div>
+              <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                {items.map(s=>(
+                  <div key={s.id} className="card" style={{padding:'10px 14px',borderLeft:`4px solid ${s.color||'#6366f1'}`,display:'flex',alignItems:'center',gap:12}}>
+                    <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:'var(--accent)',fontWeight:600,minWidth:80}}>
+                      {s.start_time} - {s.end_time}
+                    </div>
+                    <div style={{flex:1}}>
+                      <div style={{fontWeight:700,fontSize:13}}>{s.class_name}</div>
+                      <div style={{fontSize:11,color:'var(--muted)'}}>{s.subject} · {s.teacher_name}</div>
+                    </div>
+                    {canManage && <button className="btn btn-d btn-sm" onClick={()=>deleteEntry(s.id)}>✕</button>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+        {(!data?.schedules?.length) && <div className="empty" style={{marginTop:16}}><div className="empty-ico">🗓</div><div style={{fontWeight:600,fontSize:14,marginBottom:4}}>Расписание пока пустое</div><div style={{fontSize:12}}>Добавьте уроки в расписание</div></div>}
+      </div>
+
+      {showCreate && (
+        <Modal title="🗓 Добавить урок в расписание" onClose={()=>setShowCreate(false)}>
+          <Alert msg={err}/>
+          <form onSubmit={create}>
+            <div className="fg"><label className="fl">Класс</label>
+              <select className="fi" required value={form.classId} onChange={set('classId')}>
+                <option value="">Выберите класс</option>
+                {(classes||[]).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div className="fg"><label className="fl">День недели</label>
+              <select className="fi" value={form.dayOfWeek} onChange={set('dayOfWeek')}>
+                {[1,2,3,4,5,6].map(d=><option key={d} value={d}>{DAY_FULL[d]}</option>)}
+              </select>
+            </div>
+            <div className="g2">
+              <div className="fg"><label className="fl">Начало</label><input className="fi" type="time" required value={form.startTime} onChange={set('startTime')}/></div>
+              <div className="fg"><label className="fl">Конец</label><input className="fi" type="time" required value={form.endTime} onChange={set('endTime')}/></div>
+            </div>
+            <div className="fg"><label className="fl">Кабинет</label><input className="fi" value={form.room} onChange={set('room')} placeholder="101"/></div>
+            <div style={{background:'var(--primary-light)',borderRadius:8,padding:'10px 12px',fontSize:12,color:'var(--primary)',marginBottom:14}}>
+              ℹ️ Система автоматически проверит конфликты по кабинетам и учителям
+            </div>
+            <div style={{display:'flex',gap:8}}>
+              <button type="submit" className="btn btn-p" style={{flex:1}}>Добавить</button>
+              <button type="button" className="btn btn-s" onClick={()=>setShowCreate(false)}>Отмена</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ·· AUDIT LOG VIEW
+function AuditLogView({ user }) {
+  const [offset, setOffset] = useState(0);
+  const [filter, setFilter] = useState('');
+  const LIMIT = 50;
+  const url = `/api/audit?limit=${LIMIT}&offset=${offset}${filter?`&action=${encodeURIComponent(filter)}`:''}`;
+  const { data, loading } = useApi(() => API.get(url), [url]);
+  const logs = data?.logs || [];
+
+  return (
+    <div className="fade">
+      <div className="ph"><div className="pt">Журнал действий</div><div className="ps">Аудит-лог всех операций</div></div>
+      <div style={{marginBottom:14}}>
+        <input className="fi" style={{maxWidth:320}} placeholder="🔍 Фильтр по действию..." value={filter} onChange={e=>{setFilter(e.target.value);setOffset(0);}}/>
+      </div>
+      <div className="card">
+        <div className="cb" style={{padding:0}}>
+          {loading ? <Spinner/> : (
+            <table className="tbl">
+              <thead><tr><th>Время</th><th>Пользователь</th><th>Действие</th><th>Объект</th></tr></thead>
+              <tbody>
+                {logs.map(l=>(
+                  <tr key={l.id}>
+                    <td style={{fontSize:11,color:'var(--muted)',whiteSpace:'nowrap'}}>{fmtDate(l.created_at)}</td>
+                    <td style={{fontWeight:600,fontSize:12}}>{l.user_name||`ID:${l.user_id}`}</td>
+                    <td><span className={`bdg ${l.action?.includes('DELETE')?'br':l.action?.includes('POST')?'bg':'bb'}`} style={{fontSize:10,fontFamily:"'JetBrains Mono',monospace"}}>{l.action}</span></td>
+                    <td style={{fontSize:11,color:'var(--muted)'}}>{l.entity_type}{l.entity_id?` #${l.entity_id}`:''}</td>
+                  </tr>
+                ))}
+                {!logs.length && <tr><td colSpan={4}><div className="empty"><div className="empty-ico">📝</div>Нет записей</div></td></tr>}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+      {data && (
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:12}}>
+          <span style={{fontSize:12,color:'var(--muted)'}}>Всего: {data.total} записей</span>
+          <div style={{display:'flex',gap:8}}>
+            <button className="btn btn-s btn-sm" disabled={offset===0} onClick={()=>setOffset(Math.max(0,offset-LIMIT))}>← Назад</button>
+            <button className="btn btn-s btn-sm" disabled={offset+LIMIT>=data.total} onClick={()=>setOffset(offset+LIMIT)}>Вперёд →</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── MAIN APP SHELL ─────────────────────────────────────────────────────────────
+function AppShell({ user: initialUser, center, onLogout }) {
+  const [user, setUser] = useState(initialUser);
+  const [page, setPage] = useState('dashboard');
+  const [showNotif, setShowNotif] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { data: notifData, reload: reloadNotifs } = useApi(() => API.get('/api/notifications'));
+  const unread = notifData?.unread ?? 0;
+  const confirm = useConfirm();
+
+  // Auto-refresh notifications every 30 seconds
+  useEffect(() => {
+    const timer = setInterval(reloadNotifs, 30_000);
+    return () => clearInterval(timer);
+  }, [reloadNotifs]);
+
+  const nav = NAV[user.role] || [];
+  const sections = [...new Set(nav.map(n=>n.sec))];
+  const pageTitle = nav.find(n=>n.id===page)?.label || 'BilimHub';
+
+  function renderPage() {
+    // Shared pages available to all roles
+    if (page==='schedule') return <ScheduleView user={user}/>;
+    if (page==='audit' && ['super_admin','center_admin'].includes(user.role)) return <AuditLogView user={user}/>;
+    if (page==='notifications') return <NotificationsPage onRead={reloadNotifs}/>;
+    if (page==='profile') return <ProfilePage user={user} onLogout={onLogout} onNameChange={name=>setUser(u=>({...u,name}))}/>;
+
+    if (user.role==='super_admin') {
+      if (page==='dashboard') return <SuperDash user={user}/>;
+      if (page==='centers')   return <CentersView/>;
+      if (page==='users_all') return <UsersView user={user}/>;
+    }
+    if (user.role==='center_admin') {
+      if (page==='dashboard') return <CenterDash user={user} center={center}/>;
+      if (page==='tokens') return <TokensView/>;
+      if (page==='users') return <UsersView user={user}/>;
+      if (page==='classes') return <ClassesView user={user}/>;
+      if (page==='assignments') return <AssignmentsView user={user}/>;
+      if (page==='gradebook') return <GradebookView user={user}/>;
+      if (page==='attendance') return <AttendanceView user={user}/>;
+    }
+    if (user.role==='teacher') {
+      if (page==='dashboard') return <TeacherDash user={user}/>;
+      if (page==='classes') return <ClassesView user={user}/>;
+      if (page==='assignments') return <AssignmentsView user={user}/>;
+      if (page==='gradebook') return <GradebookView user={user}/>;
+      if (page==='attendance') return <AttendanceView user={user}/>;
+    }
+    if (user.role==='student') {
+      if (page==='dashboard') return <StudentDash user={user}/>;
+      if (page==='assignments') return <AssignmentsView user={user}/>;
+      if (page==='grades') return <GradesView user={user}/>;
+      if (page==='classes') return <ClassesView user={user}/>;
+      if (page==='attendance') return <AttendanceView user={user}/>;
+    }
+    if (user.role==='parent') {
+      if (page==='dashboard') return <ParentDash user={user}/>;
+      if (page==='grades') return <GradesView user={user}/>;
+      if (page==='assignments') return <AssignmentsView user={user}/>;
+      if (page==='attendance') return <AttendanceView user={user}/>;
+    }
+    return <div className="empty"><div className="empty-ico">🚧</div><div>В разработке</div></div>;
+  }
+
+  return (
+    <div className="app">
+      <div className={`sb-overlay ${sidebarOpen?'open':''}`} onClick={()=>setSidebarOpen(false)}/>
+      <aside className={`sb ${sidebarOpen?'open':''}`}>
+        <div className="sb-logo">
+          <div className="sb-logo-wrap">
+            <div className="sb-icon">B</div>
+            <div>
+              <div className="sb-name">BilimHub</div>
+              <div className="sb-tagline">SaaS Platform</div>
+            </div>
+          </div>
+        </div>
+        {center && (
+          <div className="sb-center">
+            <div className="sb-center-name">{center.name}</div>
+            <div className="sb-center-code">{center.code}</div>
+          </div>
+        )}
+        {sections.map(sec=>(
+          <div className="nav-sec" key={sec}>
+            <div className="nav-lbl">{sec}</div>
+            {nav.filter(n=>n.sec===sec).map(n=>(
+              <div key={n.id} className={`nav-item ${page===n.id?'active':''}`} onClick={()=>{setPage(n.id);setSidebarOpen(false);}}>
+                <span className="nav-ico">{n.ico}</span>{n.label}
+                {n.id==='notifications' && unread>0
+                  ? <span className="nav-badge">{unread}</span>
+                  : n.badge ? <span className="nav-badge">{n.bagde}</span> : null
+                }
+              </div>
+            ))}
+          </div>
+        ))}
+        <div className="sb-foot">
+          <div className="user-pill" onClick={async()=>{
+            const ok = await confirm('Вы уверены что хотите выйти из системы?', 'Выйти из аккаунта?', { icon: '👋', confirmText: 'Выйти', cancelText: 'Остаться' });
+            if(ok){await API.logout();onLogout();}
+          }}>
+            <div className="ava" style={{width:32,height:32,fontSize:12,background:avaColor(user.role)}}>{initials(user.name)}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div className="user-nm">{user.name}</div>
+              <div className="user-rl">{roleLabel[user.role]}</div>
+            </div>
+            <span style={{color:'#6b7280',fontSize:12}}>↩</span>
+          </div>
+        </div>
+      </aside>
+
+      <div className="main">
+        <div className="topbar">
+          <button className="mob-menu" onClick={()=>setSidebarOpen(p=>!p)}>☰</button>
+          <div className="topbar-title">{pageTitle}</div>
+          <div style={{display:'flex',alignItems:'center',gap:8,position:'relative'}}>
+            <div className="ico-btn" onClick={()=>{setShowNotif(p=>!p);}} title="Уведомления">
+              🔔{unread>0&&<div className="dot"/>}
+            </div>
+            {showNotif && (
+              <>
+                <div style={{position:'fixed',inset:0,zIndex:40}} onClick={()=>setShowNotif(false)}/>
+                <NotifPanel onClose={()=>setShowNotif(false)} onRead={reloadNotifs}/>
+              </>
+            )}
+          </div>
+        </div>
+        <div className="content">{renderPage()}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── ROOT ──────────────────────────────────────────────────────────────────────
+function Root() {
+  const [authState, setAuthState] = useState('loading'); // loading | unauth | auth
+  const [user, setUser] = useState(null);
+  const [center, setCenter] = useState(null);
+
+  API.onUnauth(() => { setUser(null); setCenter(null); setAuthState('unauth'); });
+
+  useEffect(() => {
+    API.tryRestoreSession().then(async data => {
+      if (data) {
+        setUser(data.user); setCenter(data.center || null); setAuthState('auth');
+        // If center is missing (restored via refresh), fetch it
+        if (!data.center && data.user) {
+          try { const me = await API.get('/api/auth/me'); setCenter(me.center); setUser(me.user); }
+          catch {}
+        }
+      }
+      else setAuthState('unauth');
+    });
+  }, []);
+
+  if (authState==='loading') {
+    return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',fontSize:14,color:'var(--muted)'}}>Загрузка BilimHub...</div>;
+  }
+
+  if (authState==='unauth') {
+    return <AuthPage onLogin={u => { setUser(u); setAuthState('auth'); API.get('/api/auth/me').then(d=>setCenter(d.center)).catch(()=>{}); }} />;
+  }
+
+  return <AppShell user={user} center={center} onLogout={()=>{ setUser(null); setCenter(null); setAuthState('unauth'); }}/>;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <ErrorBoundary>
+    <MobileAppWrapper>
+      <ToastProvider>
+        <ConfirmProvider>
+          <Root/>
+        </ConfirmProvider>
+      </ToastProvider>
+    </MobileAppWrapper>
+  </ErrorBoundary>
+);

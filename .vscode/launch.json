@@ -1,0 +1,36 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "🚀 Start EduSaaS Server",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/server.js",
+      "nodeArgs": ["--experimental-sqlite"],
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "restart": true,
+      "runtimeExecutable": "node",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "🌱 Run Seed",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/database.js",
+      "nodeArgs": ["--experimental-sqlite"],
+      "args": ["seed"],
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "🧪 Run Tests",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/test.js",
+      "nodeArgs": ["--experimental-sqlite"],
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal"
+    }
+  ]
+}

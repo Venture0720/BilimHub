@@ -1,0 +1,37 @@
+node_modules/
+.env
+*.db
+*.db-shm
+*.db-wal
+uploads/*
+!uploads/.gitkeep
+dist/
+npm-debug.log*
+.DS_Store
+
+# Vendor JS bundles (download via: node scripts/download-libs.js)
+client/libs/
+
+# Test files (не нужны в production)
+api.http
+test.js
+
+# Backup folder (создается автоматически)
+backups/
+
+# JDK (не хранить в репозитории)
+jdk-*/
+
+# Android build cache
+android/.gradle/
+android/app/build/
+android/capacitor-cordova-android-plugins/build/
+
+# Documentation (большие файлы, для dev only)
+*.prompt.md
+PHASE1_*.md
+PRE_LAUNCH_*.md
+IMPLEMENTATION_*.md
+DATA_*.md
+FRONTEND_*.md
+

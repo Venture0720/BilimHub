@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#36a383" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<link rel="manifest" href="/manifest.json" />
+<link rel="apple-touch-icon" href="/icons/icon-192.svg" />
+<link rel="icon" type="image/svg+xml" href="/icons/icon-96.svg" />
+<title>BilimHub</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+<div id="root">
+  <div id="loader" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#0d1117;color:#fff;font-family:system-ui,sans-serif">
+    <div style="width:48px;height:48px;background:linear-gradient(135deg,hsl(160,50%,40%),hsl(180,45%,45%));border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;margin-bottom:16px">B</div>
+    <div style="font-size:18px;font-weight:700;margin-bottom:6px">BilimHub</div>
+    <div id="load-status" style="font-size:12px;color:#94a3b8;text-align:center">Загрузка приложения...</div>
+    <div style="margin-top:16px;width:120px;height:3px;background:#1e2530;border-radius:3px;overflow:hidden">
+      <div style="width:40%;height:100%;background:hsl(160,50%,40%);border-radius:3px;animation:loadbar 1.5s ease infinite"></div>
+    </div>
+  </div>
+</div>
+<script>
+window.onerror=function(msg,src,line,col,err){
+  var el=document.getElementById('load-status');
+  if(el)el.innerHTML='<div style=color:#ef4444;font-weight:700>Ошибка JS</div><div style=font-size:11px;margin-top:4px;color:#94a3b8;word-break:break-all>'+msg+'</div><div style=font-size:10px;margin-top:4px;color:#6b7280>Строка: '+line+'</div>';
+  return false;
+};
+</script>
+<script type="module" src="/main.jsx"></script>
+</body>
+</html>

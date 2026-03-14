@@ -1,0 +1,52 @@
+{
+  "editor.formatOnSave": true,
+  "editor.tabSize": 2,
+  "editor.rulers": [100],
+  "editor.wordWrap": "on",
+  "files.exclude": {
+    "**/node_modules": true,
+    "**/*.db-shm": true,
+    "**/*.db-wal": true,
+    "**/uploads/*": true
+  },
+
+  // JS/Node settings
+  "javascript.preferences.quoteStyle": "single",
+  "javascript.updateImportsOnFileMove.enabled": "always",
+  "js/ts.implicitProjectConfig.checkJs": true,
+
+  // Node 22 built-in sqlite — tell TS server about it
+  "typescript.preferences.includePackageJsonAutoImports": "on",
+
+  // GitHub Copilot — use Claude claude-opus-4-6 model
+  "github.copilot.editor.enableAutoCompletions": true,
+  "github.copilot.chat.localeOverride": "ru",
+
+  // Recommended model for this project (requires Copilot Pro+)
+  "github.copilot.chat.defaultModel": "claude-opus-4-6",
+
+  // Terminal
+  "terminal.integrated.env.linux": {
+    "NODE_OPTIONS": "--experimental-sqlite"
+  },
+  "terminal.integrated.env.osx": {
+    "NODE_OPTIONS": "--experimental-sqlite"
+  },
+  "terminal.integrated.env.windows": {
+    "NODE_OPTIONS": "--experimental-sqlite"
+  },
+
+  // File associations
+  "files.associations": {
+    "*.env.example": "dotenv",
+    ".env": "dotenv"
+  },
+
+  // REST Client (если установлен)
+  "rest-client.environmentVariables": {
+    "local": {
+      "baseUrl": "http://localhost:3000",
+      "token": ""
+    }
+  }
+}
