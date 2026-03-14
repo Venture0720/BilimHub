@@ -78,11 +78,21 @@ router.get('/:id', ...requireRole('center_admin','super_admin','teacher','parent
 // ── PATCH /api/users/me ─────────────────────────────────────────────────────
 router.patch('/me', require('../middleware/auth').authenticate, async (req, res, next) => {
   try {
-    const { name } = req.body;
-    if (!name || !String(name).trim()) return res.status(400).json({ error: 'Name required' });
-    if (String(name).trim().length > 200) return res.status(400).json({ error: 'Name must be under 200 characters' });
-    await db.run(`UPDATE users SET name = ? WHERE id = ?`, [String(name).trim(), req.user.id]);
-    const updated = await db.get(`SELECT id, name, email, role, center_id AS "centerId" FROM users WHERE id = ?`, [req.user.id]);
+    const { name, email } = req.body;
+    if (name !== undefined) {
+      if (!String(name).trim()) return res.status(400).json({ error: 'Name required' });
+      if (String(name).trim().length > 200) return res.status(400).json({ error: 'Name must be under 200 characters' });
+    }
+    if (email !== undefined && email !== '' && !/\S+@\S+\.\S+/.test(email)) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+    const sets = []; const params = [];
+    if (name !== undefined) { sets.push('name = ?'); params.push(String(name).trim()); }
+    if (email !== undefined) { sets.push('email = ?'); params.push(email || null); }
+    if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+    params.push(req.user.id);
+    await db.run(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, params);
+    const updated = await db.get(`SELECT id, name, email, username, role, center_id AS "centerId" FROM users WHERE id = ?`, [req.user.id]);
     res.json(updated);
   } catch (err) { next(err); }
 });

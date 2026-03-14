@@ -220,7 +220,7 @@ router.get('/me', authenticate, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ── POST /api/auth/change-password ────────────────────────────────────────────
+// ── POST /api/auth/change-password (also PATCH /api/auth/password for frontend)
 router.post('/change-password', authenticate, async (req, res, next) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -239,6 +239,19 @@ router.post('/change-password', authenticate, async (req, res, next) => {
     res.clearCookie('refreshToken', { path: '/api/auth/refresh' });
     res.json({ ok: true });
   } catch (err) { next(err); }
+});
+router.patch('/password', authenticate, async (req, res, next) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Both passwords required' });
+  if (newPassword.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  const user = await db.get(`SELECT password_hash FROM users WHERE id = ?`, [req.user.id]);
+  const valid = await bcrypt.compare(currentPassword, user.password_hash);
+  if (!valid) return res.status(400).json({ error: 'Current password is incorrect' });
+  const hash = await bcrypt.hash(newPassword, 12);
+  await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [hash, req.user.id]);
+  await db.run(`DELETE FROM refresh_tokens WHERE user_id = ?`, [req.user.id]);
+  res.clearCookie('refreshToken', { path: '/api/auth/refresh' });
+  res.json({ ok: true });
 });
 
 module.exports = router;

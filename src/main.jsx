@@ -1180,7 +1180,7 @@ function TokensView() {
               <div className="fg"><label className="fl">Ребёнок <span style={{color:'var(--muted)',fontWeight:400}}>(привязать к ученику)</span></label>
                 <select className="fi" value={form.linkedStudentId} onChange={set('linkedStudentId')}>
                   <option value="">— выберите ученика —</option>
-                  {(students||[]).map(s=><option key={s.id} value={s.id}>{s.name} ({s.email})</option>)}
+                  {(students||[]).map(s=><option key={s.id} value={s.id}>{s.name}{s.email ? ` (${s.email})` : ``}</option>)}
                 </select>
               </div>
             )}
@@ -1676,7 +1676,7 @@ function ClassesView({ user }) {
             <form onSubmit={enroll}>
               <div className="fg"><label className="fl">Выберите учеников</label>
                 <select className="fi" multiple style={{height:180}} value={enrollIds} onChange={e=>setEnrollIds([...e.target.selectedOptions].map(o=>o.value))}>
-                  {available.map(s=><option key={s.id} value={s.id}>{s.name} ({s.email})</option>)}
+                  {available.map(s=><option key={s.id} value={s.id}>{s.name}{s.email ? ` (${s.email})` : ''}</option>)}
                 </select>
                 <div style={{fontSize:10,color:'var(--muted)',marginTop:4}}>Ctrl+клик для выбора нескольких</div>
               </div>
@@ -1904,6 +1904,55 @@ function GradeModal({ submission, assignment, onGrade, onClose }) {
   );
 }
 
+// ·· SUBMIT WORK MODAL
+function SubmitWorkModal({ assignment, onClose, onSubmit }) {
+  const [answer, setAnswer] = useState('');
+  const [file, setFile] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function submit(e) {
+    e.preventDefault(); setErr('');
+    if (!answer.trim() && !file) return setErr('Введите текстовый ответ или прикрепите файл');
+    setLoading(true);
+    try { await onSubmit(assignment.id, answer, file); }
+    catch(ex) { setErr(ex.message); setLoading(false); }
+  }
+
+  return (
+    <Modal title={`📤 Сдать: ${assignment.title}`} onClose={onClose}>
+      <div style={{fontSize:12,color:'var(--muted)',marginBottom:12}}>
+        {assignment.class_name} · до {fmtDate(assignment.due_date)} · Макс: {assignment.max_score} баллов
+      </div>
+      {assignment.description && (
+        <div style={{background:'var(--surface2)',borderRadius:8,padding:'10px 12px',fontSize:12,marginBottom:12}}>
+          {assignment.description}
+        </div>
+      )}
+      <Alert msg={err}/>
+      <form onSubmit={submit}>
+        <div className="fg">
+          <label className="fl">Текстовый ответ</label>
+          <textarea className="fi" rows={4} value={answer} onChange={e=>setAnswer(e.target.value)} placeholder="Введите ваш ответ..."/>
+        </div>
+        <div className="fg">
+          <label className="fl">Прикрепить файл (PDF, Word, фото…)</label>
+          <input type="file" className="fi" style={{padding:'6px 8px'}}
+            accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.zip,.pptx,.xlsx"
+            onChange={e=>setFile(e.target.files[0])}/>
+          {file && <div style={{fontSize:11,color:'var(--primary)',marginTop:4}}>📎 {file.name}</div>}
+        </div>
+        <div style={{display:'flex',gap:8,marginTop:4}}>
+          <button type="submit" className="btn btn-p" style={{flex:1}} disabled={loading}>
+            {loading ? 'Отправка...' : '📤 Сдать работу'}
+          </button>
+          <button type="button" className="btn btn-s" onClick={onClose}>Отмена</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 // ·· ASSIGNMENTS VIEW
 function AssignmentsView({ user }) {
   const { data: classes } = useApi(() => API.get('/api/classes'));
@@ -1963,11 +2012,23 @@ function AssignmentsView({ user }) {
     try { await API.patch(`/api/submissions/${subId}/return`, { feedback }); viewSubmissions(viewAssign); toast('Работа возвращена', 'success'); } catch(ex) { alert(ex.message); }
   }
 
+  const [submitModal, setSubmitModal] = useState(null); // assignment object
+
   // Student submit
-  async function submitWork(assignmentId) {
-    const answer = prompt('Введите текстовый ответ:');
-    if (!answer) return;
-    try { await API.post(`/api/submissions/${assignmentId}`, { textAnswer: answer }); reload(); toast('Работа сдана!', 'success'); } catch(ex) { alert(ex.message); }
+  async function submitWork(assignment, e) {
+    if (e) e.stopPropagation();
+    setSubmitModal(assignment);
+  }
+
+  async function doSubmit(assignmentId, textAnswer, file) {
+    const fd = new FormData();
+    fd.append('assignmentId', assignmentId);
+    if (textAnswer) fd.append('textAnswer', textAnswer);
+    if (file) fd.append('file', file);
+    await API.post('/api/submissions', fd, true);
+    reload();
+    toast('Работа сдана! ✅', 'success');
+    setSubmitModal(null);
   }
 
   if (loading) return <Spinner/>;
@@ -2077,7 +2138,7 @@ function AssignmentsView({ user }) {
                           {a.submission_status==='submitted'?'Сдано':a.submission_status==='returned'?'Возвращено':'—'}
                         </span>
                     )
-                  : <button className="btn btn-p btn-sm" onClick={e=>{e.stopPropagation();submitWork(a.id);}}>Сдать</button>
+                  : <button className="btn btn-p btn-sm" onClick={e=>{e.stopPropagation();submitWork(a,e);}}>Сдать</button>
               )}
               {canCreate && <button className="btn btn-d btn-sm" onClick={e=>{e.stopPropagation();deleteAssign(a.id);}}>🗑</button>}
             </div>
@@ -2085,6 +2146,15 @@ function AssignmentsView({ user }) {
         ))}
       </div>
       {(!assignments||!assignments.length)&&<div className="empty"><div className="empty-ico">📋</div>Нет заданий</div>}
+
+      {/* Submit work modal */}
+      {submitModal && (
+        <SubmitWorkModal
+          assignment={submitModal}
+          onClose={()=>setSubmitModal(null)}
+          onSubmit={doSubmit}
+        />
+      )}
       {showCreate && (
         <Modal title="Создать задание" onClose={()=>setShowCreate(false)}>
           <Alert msg={err}/>
@@ -2408,7 +2478,7 @@ function UsersView({ user }) {
             <div className="fg"><label className="fl">Ученик</label>
               <select className="fi" required value={linkStudentId} onChange={e=>setLinkStudentId(e.target.value)}>
                 <option value="">— выберите ученика —</option>
-                {(students||[]).map(s=><option key={s.id} value={s.id}>{s.name} ({s.email})</option>)}
+                {(students||[]).map(s=><option key={s.id} value={s.id}>{s.name}{s.email ? ` (${s.email})` : ``}</option>)}
               </select>
             </div>
             <div style={{display:'flex',gap:8,marginTop:14}}>
