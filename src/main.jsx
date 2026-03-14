@@ -1,11 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, createContext, useContext } from 'react';
 import ReactDOM from 'react-dom/client';
 import './styles.css';
-import { isNative, initNativeBridge } from './lib/platform';
-import { MobileAppWrapper } from './lib/MobileAppWrapper';
-
-// Initialize native bridge when running in Capacitor
-initNativeBridge();
 
 // ── Toast Context ─────────────────────────────────────────────────────────────
 const ToastContext = createContext(null);
@@ -2871,12 +2866,10 @@ function Root() {
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <ErrorBoundary>
-    <MobileAppWrapper>
-      <ToastProvider>
-        <ConfirmProvider>
-          <Root/>
-        </ConfirmProvider>
-      </ToastProvider>
-    </MobileAppWrapper>
+    <ToastProvider>
+      <ConfirmProvider>
+        <Root/>
+      </ConfirmProvider>
+    </ToastProvider>
   </ErrorBoundary>
 );
