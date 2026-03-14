@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: bilimhub
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run migrate && npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: JWT_ACCESS_EXPIRES
+        value: 15m
+      - key: JWT_REFRESH_EXPIRES
+        value: 7d
+      - key: UPLOADS_DIR
+        value: ./uploads
+      - key: MAX_UPLOAD_MB
+        value: 20
+      - key: DB_SSL
+        value: true
+      # Следующие задай вручную в Render Dashboard:
+      # JWT_ACCESS_SECRET, JWT_REFRESH_SECRET, DATABASE_URL, VITE_API_URL, ALLOWED_ORIGINS
+
