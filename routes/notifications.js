@@ -12,16 +12,14 @@ router.get('/', authenticate, async (req, res, next) => {
     if (unreadOnly === '1' || unreadOnly === 'true') { q += ' AND is_read = 0'; }
     q += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
     params.push(Math.min(parseInt(limit) || 50, 200), parseInt(offset) || 0);
-    const notifs = await db.all(q, params);
-    const unread = notifs.filter(n => !n.is_read).length;
-    res.json({ notifs, unread });
+    res.json(await db.all(q, params));
   } catch (err) { next(err); }
 });
 
 // ── GET /api/notifications/unread-count ──────────────────────────────────────
 router.get('/unread-count', authenticate, async (req, res, next) => {
   try {
-    const row = await db.get(`SELECT COUNT(*)::int AS count FROM notifications WHERE user_id = ? AND is_read = 0`, [req.user.id]);
+    const row = await db.get(`SELECT COUNT(*) AS count FROM notifications WHERE user_id = ? AND is_read = 0`, [req.user.id]);
     res.json({ count: row.count });
   } catch (err) { next(err); }
 });
@@ -36,14 +34,8 @@ router.patch('/:id/read', authenticate, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ── POST /api/notifications/read-all (also PATCH for frontend compatibility)
+// ── POST /api/notifications/read-all ─────────────────────────────────────────
 router.post('/read-all', authenticate, async (req, res, next) => {
-  try {
-    await db.run(`UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0`, [req.user.id]);
-    res.json({ ok: true });
-  } catch (err) { next(err); }
-});
-router.patch('/read-all', authenticate, async (req, res, next) => {
   try {
     await db.run(`UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0`, [req.user.id]);
     res.json({ ok: true });
@@ -61,4 +53,3 @@ router.delete('/:id', authenticate, async (req, res, next) => {
 });
 
 module.exports = router;
-

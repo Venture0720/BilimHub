@@ -79,20 +79,23 @@ router.get('/:id', ...requireRole('center_admin','super_admin','teacher','parent
 router.patch('/me', require('../middleware/auth').authenticate, async (req, res, next) => {
   try {
     const { name, email } = req.body;
+    const updates = {};
     if (name !== undefined) {
       if (!String(name).trim()) return res.status(400).json({ error: 'Name required' });
       if (String(name).trim().length > 200) return res.status(400).json({ error: 'Name must be under 200 characters' });
+      updates.name = String(name).trim();
     }
-    if (email !== undefined && email !== '' && !/\S+@\S+\.\S+/.test(email)) {
-      return res.status(400).json({ error: 'Invalid email format' });
+    if (email !== undefined) {
+      const trimmed = String(email).trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return res.status(400).json({ error: 'Invalid email' });
+      const existing = await db.get(`SELECT id FROM users WHERE email = ? AND id != ?`, [trimmed, req.user.id]);
+      if (existing) return res.status(409).json({ error: 'Email already in use' });
+      updates.email = trimmed;
     }
-    const sets = []; const params = [];
-    if (name !== undefined) { sets.push('name = ?'); params.push(String(name).trim()); }
-    if (email !== undefined) { sets.push('email = ?'); params.push(email || null); }
-    if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
-    params.push(req.user.id);
-    await db.run(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, params);
-    const updated = await db.get(`SELECT id, name, email, username, role, center_id AS "centerId" FROM users WHERE id = ?`, [req.user.id]);
+    if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nothing to update' });
+    const sets = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+    await db.run(`UPDATE users SET ${sets} WHERE id = ?`, [...Object.values(updates), req.user.id]);
+    const updated = await db.get(`SELECT id, name, email, role, center_id AS "centerId" FROM users WHERE id = ?`, [req.user.id]);
     res.json(updated);
   } catch (err) { next(err); }
 });

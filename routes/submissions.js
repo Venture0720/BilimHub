@@ -146,32 +146,6 @@ router.get('/', authenticate, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ── GET /api/submissions/assignment/:id — teacher views all submissions for an assignment
-router.get('/assignment/:id', authenticate, async (req, res, next) => {
-  try {
-    const aId = parseInt(req.params.id);
-    const assignment = await db.get(`SELECT a.*, c.teacher_id FROM assignments a JOIN classes c ON a.class_id = c.id WHERE a.id = ?`, [aId]);
-    if (!assignment) return res.status(404).json({ error: 'Assignment not found' });
-    if (req.user.role !== 'super_admin' && assignment.center_id !== req.user.center_id) return res.status(403).json({ error: 'Forbidden' });
-    if (req.user.role === 'teacher' && assignment.teacher_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
-
-    const submissions = await db.all(`
-      SELECT s.*, u.name AS student_name
-      FROM submissions s JOIN users u ON s.student_id = u.id
-      WHERE s.assignment_id = ? ORDER BY s.submitted_at DESC
-    `, [aId]);
-
-    const submittedIds = new Set(submissions.map(s => s.student_id));
-    const enrolled = await db.all(`
-      SELECT u.id, u.name FROM users u
-      JOIN enrollments e ON e.student_id = u.id WHERE e.class_id = ?
-    `, [assignment.class_id]);
-    const notSubmitted = enrolled.filter(s => !submittedIds.has(s.id));
-
-    res.json({ submissions, notSubmitted });
-  } catch (err) { next(err); }
-});
-
 // ── GET /api/submissions/:id ─────────────────────────────────────────────────
 router.get('/:id', authenticate, async (req, res, next) => {
   try {

@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef, createContext, useContext } from 'react';
 import ReactDOM from 'react-dom/client';
 import './styles.css';
+import { isNative, initNativeBridge } from './lib/platform';
+import { MobileAppWrapper } from './lib/MobileAppWrapper';
+
+// Initialize native bridge when running in Capacitor
+initNativeBridge();
 
 // ── Toast Context ─────────────────────────────────────────────────────────────
 const ToastContext = createContext(null);
@@ -285,6 +290,19 @@ function useApi(fn, deps) {
   return { data, loading, error, reload: load };
 }
 
+// ── Responsive Hook ───────────────────────────────────────────────────────────
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(window.innerWidth < breakpoint);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint - 1}px)`);
+    const handler = (e) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    setIsMobile(mq.matches);
+    return () => mq.removeEventListener('change', handler);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 // ── Components ─────────────────────────────────────────────────────────────────
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { hasError: false, error: null }; }
@@ -329,6 +347,47 @@ function StatGrid({ stats }) {
           <div className="si">{s.icon}</div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ── BOTTOM NAV (Duolingo-style mobile tab bar) ───────────────────────────────
+function BottomNav({ nav, page, setPage, unread }) {
+  // Show max 5 items in bottom nav (most important ones)
+  const mainItems = nav.filter(n => ['dashboard','schedule','assignments','gradebook','grades','classes','notifications'].includes(n.id)).slice(0, 5);
+  if (!mainItems.length) return null;
+  return (
+    <nav className="bottom-nav">
+      {mainItems.map(n => (
+        <button
+          key={n.id}
+          className={`bottom-nav-item ${page === n.id ? 'active' : ''}`}
+          onClick={() => setPage(n.id)}
+        >
+          <span className="nav-ico">{n.ico}</span>
+          <span>{n.label.length > 10 ? n.label.slice(0, 8) + '…' : n.label}</span>
+          {n.id === 'notifications' && unread > 0 && <span className="bottom-nav-badge">{unread}</span>}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+// ── RESPONSIVE TABLE → CARDS ──────────────────────────────────────────────────
+function ResponsiveTable({ headers, rows, renderRow, renderCard, emptyIcon, emptyText }) {
+  const isMobile = useIsMobile();
+  if (!rows?.length) {
+    return <div className="empty"><div className="empty-ico">{emptyIcon || '📋'}</div>{emptyText || 'Нет данных'}</div>;
+  }
+  if (isMobile && renderCard) {
+    return <div className="mobile-cards">{rows.map(renderCard)}</div>;
+  }
+  return (
+    <div style={{overflowX:'auto',WebkitOverflowScrolling:'touch'}}>
+      <table className="tbl">
+        <thead><tr>{headers.map((h,i) => <th key={i}>{h}</th>)}</tr></thead>
+        <tbody>{rows.map(renderRow)}</tbody>
+      </table>
     </div>
   );
 }
@@ -593,8 +652,6 @@ const NAV = {
     {id:'users',label:'Пользователи',ico:'👥',sec:'Пользователи'},
     {id:'classes',label:'Классы',ico:'📚',sec:'Учёба'},
     {id:'schedule',label:'Расписание',ico:'🗓',sec:'Учёба'},
-    {id:'assignments',label:'Задания',ico:'📋',sec:'Учёба'},
-    {id:'gradebook',label:'Журнал оценок',ico:'📊',sec:'Учёба'},
     {id:'attendance',label:'Посещаемость',ico:'✅',sec:'Учёба'},
     {id:'audit',label:'Журнал действий',ico:'📝',sec:'Управление'},
     {id:'notifications',label:'Уведомления',ico:'🔔',sec:'Аккаунт'},
@@ -636,6 +693,7 @@ const NAV = {
 // ·· SUPER ADMIN DASHBOARD
 function SuperDash() {
   const { data, loading } = useApi(() => API.get('/api/centers'));
+  const isMobile = useIsMobile();
   if (loading) return <Spinner/>;
   const totalStudents = data?.reduce((s,c)=>s+(c.student_count||0),0)||0;
   const totalTeachers = data?.reduce((s,c)=>s+(c.teacher_count||0),0)||0;
@@ -650,21 +708,37 @@ function SuperDash() {
       ]}/>
       <div className="card">
         <div className="ch"><div className="ct">Зарегистрированные центры</div></div>
-        <div className="cb" style={{padding:'0 0 0'}}>
-          <table className="tbl">
-            <thead><tr><th>Центр</th><th>Код</th><th>Учеников</th><th>Учителей</th><th>Статус</th></tr></thead>
-            <tbody>
-              {(data||[]).map(c=>(
-                <tr key={c.id}>
-                  <td style={{fontWeight:600}}>{c.name}</td>
-                  <td><span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:'var(--muted)'}}>{c.code}</span></td>
-                  <td>{c.student_count||0}</td>
-                  <td>{c.teacher_count||0}</td>
-                  <td><span className={`bdg ${c.is_active?'bg':'br'}`}>{c.is_active?'Активен':'Неактивен'}</span></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="cb" style={{padding:0}}>
+          <ResponsiveTable
+            headers={['Центр','Код','Учеников','Учителей','Статус']}
+            rows={data||[]}
+            renderRow={c => (
+              <tr key={c.id}>
+                <td style={{fontWeight:600}}>{c.name}</td>
+                <td><span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:'var(--muted)'}}>{c.code}</span></td>
+                <td>{c.student_count||0}</td>
+                <td>{c.teacher_count||0}</td>
+                <td><span className={`bdg ${c.is_active?'bg':'br'}`}>{c.is_active?'Активен':'Неактивен'}</span></td>
+              </tr>
+            )}
+            renderCard={c => (
+              <div key={c.id} className="mobile-card-item">
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                  <span style={{fontWeight:700,fontSize:14}}>{c.name}</span>
+                  <span className={`bdg ${c.is_active?'bg':'br'}`}>{c.is_active?'Активен':'Неактивен'}</span>
+                </div>
+                <div style={{display:'flex',gap:8,flexWrap:'wrap',fontSize:12,color:'var(--muted)'}}>
+                  <span style={{fontFamily:"'JetBrains Mono',monospace",background:'#f3f4f6',padding:'2px 6px',borderRadius:4,fontSize:11}}>{c.code}</span>
+                </div>
+                <div style={{display:'flex',gap:16,marginTop:8,fontSize:12}}>
+                  <span>🎓 {c.student_count||0} уч.</span>
+                  <span>👨‍🏫 {c.teacher_count||0} преп.</span>
+                </div>
+              </div>
+            )}
+            emptyIcon="🏫"
+            emptyText="Нет центров"
+          />
         </div>
       </div>
     </div>
@@ -675,7 +749,7 @@ function SuperDash() {
 function CentersView() {
   const { data: centers, loading, reload } = useApi(() => API.get('/api/centers'));
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({ name:'' });
+  const [form, setForm] = useState({ name:'', plan:'basic' });
   const [err, setErr] = useState('');
   const [saving, setSaving] = useState(false);
   const [editId, setEditId] = useState(null);
@@ -698,7 +772,7 @@ function CentersView() {
     e.preventDefault(); setErr(''); setSaving(true);
     try {
       const created = await API.post('/api/centers', form);
-      reload(); setShowCreate(false); setForm({name:''});
+      reload(); setShowCreate(false); setForm({name:'',plan:'basic'});
       // After creating, prompt to create first admin
       setNewCenter(created);
     } catch(ex) { setErr(ex.message); }
@@ -746,8 +820,8 @@ function CentersView() {
 
   return (
     <div className="fade">
-      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-        <div>
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
+        <div style={{minWidth:0,flex:1}}>
           <div className="pt">Управление центрами</div>
           <div className="ps">{centers?.length||0} центров в системе</div>
         </div>
@@ -764,31 +838,50 @@ function CentersView() {
 
       <div className="card">
         <div className="cb" style={{padding:0}}>
-          <table className="tbl">
-            <thead><tr><th>Название</th><th>Код</th><th>Учеников</th><th>Учителей</th><th>Создан</th><th>Статус</th><th style={{width:140}}>Действия</th></tr></thead>
-            <tbody>
-              {(centers||[]).map(c=>(
-                <tr key={c.id}>
-                  <td style={{fontWeight:700}}>{c.name}</td>
-                  <td><span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:'var(--muted)',background:'#f3f4f6',padding:'2px 6px',borderRadius:4}}>{c.code}</span></td>
-                  <td style={{fontWeight:600}}>{c.student_count||0}</td>
-                  <td style={{fontWeight:600}}>{c.teacher_count||0}</td>
-                  <td style={{fontSize:11,color:'var(--muted)'}}>{fmtDate(c.created_at)}</td>
-                  <td><span className={`bdg ${c.is_active?'bg':'br'}`}>{c.is_active?'Активен':'Неактивен'}</span></td>
-                  <td>
-                    <div style={{display:'flex',gap:5}}>
-                      <button className="btn btn-s btn-sm" title="Создать инвайт-токен" onClick={()=>{setInviteCenter(c);setInviteRole('center_admin');setInviteLabel('');setInviteResult(null);setInviteErr('');}}>🔑</button>
-                      <button className="btn btn-s btn-sm" title="Редактировать" onClick={()=>{setEditId(c.id);setEditForm({name:c.name});setEditErr('');}}>✏️</button>
-                      <button className={`btn btn-sm ${c.is_active?'btn-d':'btn-g'}`} onClick={()=>toggleActive(c)}>
-                        {c.is_active?'Откл.':'Вкл.'}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {!centers?.length && <tr><td colSpan={7}><div className="empty"><div className="empty-ico">🏫</div>Нет центров</div></td></tr>}
-            </tbody>
-          </table>
+          <ResponsiveTable
+            headers={['Название','Код','Учеников','Учителей','Создан','Статус','Действия']}
+            rows={centers||[]}
+            emptyIcon="🏫" emptyText="Нет центров"
+            renderRow={c=>(
+              <tr key={c.id}>
+                <td style={{fontWeight:700}}>{c.name}</td>
+                <td><span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:'var(--muted)',background:'#f3f4f6',padding:'2px 6px',borderRadius:4}}>{c.code}</span></td>
+                <td style={{fontWeight:600}}>{c.student_count||0}</td>
+                <td style={{fontWeight:600}}>{c.teacher_count||0}</td>
+                <td style={{fontSize:11,color:'var(--muted)'}}>{fmtDate(c.created_at)}</td>
+                <td><span className={`bdg ${c.is_active?'bg':'br'}`}>{c.is_active?'Активен':'Неактивен'}</span></td>
+                <td>
+                  <div style={{display:'flex',gap:5}}>
+                    <button className="btn btn-s btn-sm" title="Создать инвайт-токен" onClick={()=>{setInviteCenter(c);setInviteRole('center_admin');setInviteLabel('');setInviteResult(null);setInviteErr('');}}>🔑</button>
+                    <button className="btn btn-s btn-sm" title="Редактировать" onClick={()=>{setEditId(c.id);setEditForm({name:c.name,plan:c.plan});setEditErr('');}}>✏️</button>
+                    <button className={`btn btn-sm ${c.is_active?'btn-d':'btn-g'}`} onClick={()=>toggleActive(c)}>
+                      {c.is_active?'Откл.':'Вкл.'}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            )}
+            renderCard={c=>(
+              <div key={c.id} className="card" style={{padding:'14px 16px',marginBottom:8}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:8}}>
+                  <div>
+                    <div style={{fontWeight:800,fontSize:15}}>{c.name}</div>
+                    <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:'var(--muted)',background:'#f3f4f6',padding:'2px 6px',borderRadius:4}}>{c.code}</span>
+                  </div>
+                  <span className={`bdg ${c.is_active?'bg':'br'}`}>{c.is_active?'Активен':'Неактивен'}</span>
+                </div>
+                <div style={{display:'flex',gap:12,fontSize:12,color:'var(--muted)',marginBottom:10}}>
+                  <span><b>{c.student_count||0}</b> учеников</span>
+                  <span><b>{c.teacher_count||0}</b> учителей</span>
+                </div>
+                <div style={{display:'flex',gap:6}}>
+                  <button className="btn btn-s btn-sm" onClick={()=>{setInviteCenter(c);setInviteRole('center_admin');setInviteLabel('');setInviteResult(null);setInviteErr('');}}>🔑 Инвайт</button>
+                  <button className="btn btn-s btn-sm" onClick={()=>{setEditId(c.id);setEditForm({name:c.name,plan:c.plan});setEditErr('');}}>✏️</button>
+                  <button className={`btn btn-sm ${c.is_active?'btn-d':'btn-g'}`} onClick={()=>toggleActive(c)}>{c.is_active?'Откл.':'Вкл.'}</button>
+                </div>
+              </div>
+            )}
+          />
         </div>
       </div>
 
@@ -798,6 +891,13 @@ function CentersView() {
           <form onSubmit={create}>
             <div className="fg"><label className="fl">Название центра</label>
               <input className="fi" required value={form.name} onChange={set('name')} placeholder="Astana Excellence Academy"/>
+            </div>
+            <div className="fg"><label className="fl">Тариф</label>
+              <select className="fi" value={form.plan} onChange={set('plan')}>
+                <option value="basic">Basic</option>
+                <option value="professional">Professional</option>
+                <option value="enterprise">Enterprise</option>
+              </select>
             </div>
             <div style={{background:'var(--primary-light)',borderRadius:8,padding:'10px 12px',fontSize:12,color:'var(--primary)',marginBottom:14}}>
               ℹ️ Уникальный код центра будет сгенерирован автоматически
@@ -840,6 +940,13 @@ function CentersView() {
             <div className="fg"><label className="fl">Название</label>
               <input className="fi" required value={editForm.name||''} onChange={e=>setEditForm(p=>({...p,name:e.target.value}))} />
             </div>
+            <div className="fg"><label className="fl">Тариф</label>
+              <select className="fi" value={editForm.plan||'basic'} onChange={e=>setEditForm(p=>({...p,plan:e.target.value}))}>
+                <option value="basic">Basic</option>
+                <option value="professional">Professional</option>
+                <option value="enterprise">Enterprise</option>
+              </select>
+            </div>
             <div style={{display:'flex',gap:8}}>
               <button type="submit" className="btn btn-p" style={{flex:1}}>Сохранить</button>
               <button type="button" className="btn btn-s" onClick={()=>setEditId(null)}>Отмена</button>
@@ -856,7 +963,7 @@ function CentersView() {
               <Alert msg={inviteErr}/>
               <div style={{background:'var(--surface2)',borderRadius:8,padding:'10px 13px',marginBottom:14,border:'1px solid var(--border)'}}>
                 <div style={{fontSize:12,fontWeight:600}}>{inviteCenter.name}</div>
-                <div style={{fontSize:11,color:'var(--muted)'}}>Код: {inviteCenter.code}</div>
+                <div style={{fontSize:11,color:'var(--muted)'}}>Код: {inviteCenter.code} · Тариф: {inviteCenter.plan}</div>
               </div>
               <form onSubmit={createInvite}>
                 <div className="fg"><label className="fl">Роль</label>
@@ -922,10 +1029,10 @@ function CenterDash({ user, center }) {
   if (loading) return <Spinner/>;
   return (
     <div className="fade">
-      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-        <div>
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
+        <div style={{minWidth:0,flex:1}}>
           <div className="pt">{center?.name || 'Центр'}</div>
-          <div className="ps" style={{display:'flex',alignItems:'center',gap:8,marginTop:5}}>
+          <div className="ps" style={{display:'flex',alignItems:'center',gap:8,marginTop:5,flexWrap:'wrap'}}>
             <span style={{fontFamily:"'JetBrains Mono',monospace",background:'#f3f4f6',padding:'2px 7px',borderRadius:4,fontSize:11}}>{center?.code}</span>
           </div>
         </div>
@@ -934,7 +1041,7 @@ function CenterDash({ user, center }) {
         {label:'Учеников',value:stats?.students||0,sub:`В центре`,icon:'🎓',color:'hsl(160,50%,40%)'},
         {label:'Учителей',value:stats?.teachers||0,sub:'Активных',icon:'👨‍🏫',color:'#10b981'},
         {label:'Классов',value:stats?.classes||0,sub:'Активных',icon:'📚',color:'#f59e0b'},
-        {label:'Не проверено',value:stats?.pendingSubmissions||0,sub:'Ждут оценки',icon:'⏳',color:'#ef4444'},
+        {label:'Токенов',value:stats?.activeTokens||0,sub:'Активных инвайтов',icon:'🔑',color:'hsl(220,60%,55%)'},
       ]}/>
       <div className="g2">
         <div className="card">
@@ -1122,13 +1229,13 @@ function TokensView() {
   const active = (tokens||[]).filter(t=>!t.used_by);
   return (
     <div className="fade">
-      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-        <div><div className="pt">Управление токенами</div><div className="ps">Инвайт-коды для подключения пользователей</div></div>
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
+        <div style={{minWidth:0,flex:1}}><div className="pt">Управление токенами</div><div className="ps">Инвайт-коды для подключения пользователей</div></div>
         <button className="btn btn-p" onClick={()=>setShowModal(true)}>🔑 Создать токен</button>
       </div>
       <div className="card" style={{padding:'14px 18px',marginBottom:16}}>
-        <div style={{display:'flex',gap:24,flexWrap:'wrap',alignItems:'center'}}>
-          <div style={{fontSize:13,color:'var(--muted)',flex:1}}>
+        <div style={{display:'flex',gap:16,flexWrap:'wrap',alignItems:'center'}}>
+          <div style={{fontSize:13,color:'var(--muted)',flex:'1 1 200px',minWidth:0}}>
             Создайте токен → Отправьте пользователю → Он регистрируется → Автоматически привязывается к центру
           </div>
           {[{label:'Всего',val:(tokens||[]).length,c:'#4f46e5'},{label:'Активных',val:active.length,c:'#10b981'},{label:'Использовано',val:(tokens||[]).length-active.length,c:'#6b7280'}].map(s=>(
@@ -1142,12 +1249,12 @@ function TokensView() {
       {isSuperAdmin && centers?.length > 0 && (
         <div style={{marginBottom:14,display:'flex',alignItems:'center',gap:10}}>
           <label style={{fontSize:12,fontWeight:600,color:'var(--muted)'}}>Центр:</label>
-          <select className="fi" style={{width:280}} value={effectiveCenterId||''} onChange={e=>setCenterId(parseInt(e.target.value))}>
+          <select className="fi" style={{width:'100%',maxWidth:320}} value={effectiveCenterId||''} onChange={e=>setCenterId(parseInt(e.target.value))}>
             {centers.map(c=><option key={c.id} value={c.id}>{c.name} ({c.code})</option>)}
           </select>
         </div>
       )}
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(320px,1fr))',gap:12}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(min(320px,100%),1fr))',gap:12}}>
         {(tokens||[]).map(t=>(
           <div className="card" key={t.id} style={{padding:'13px 15px',opacity:t.used_by?0.65:1}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
@@ -1180,7 +1287,7 @@ function TokensView() {
               <div className="fg"><label className="fl">Ребёнок <span style={{color:'var(--muted)',fontWeight:400}}>(привязать к ученику)</span></label>
                 <select className="fi" value={form.linkedStudentId} onChange={set('linkedStudentId')}>
                   <option value="">— выберите ученика —</option>
-                  {(students||[]).map(s=><option key={s.id} value={s.id}>{s.name}{s.email ? ` (${s.email})` : ``}</option>)}
+                  {(students||[]).map(s=><option key={s.id} value={s.id}>{s.name} ({s.email})</option>)}
                 </select>
               </div>
             )}
@@ -1302,8 +1409,8 @@ function AttendanceTeacherView({ user }) {
 
   return (
     <div className="fade">
-      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-        <div>
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
+        <div style={{minWidth:0,flex:1}}>
           <div className="pt">Посещаемость</div>
           {isTeacher && <div className="ps">Кликайте по ячейке для смены статуса: ✓ → ✗ → ⏱ → E</div>}
         </div>
@@ -1333,8 +1440,8 @@ function AttendanceTeacherView({ user }) {
 
       {loading ? <Spinner/> : data ? (
         <div className="card">
-          <div style={{overflowX:'auto'}}>
-            <table className="tbl" style={{minWidth: 200 + daysInMonth * 38}}>
+          <div style={{overflowX:'auto',WebkitOverflowScrolling:'touch'}}>
+            <table className="tbl" style={{minWidth: Math.min(200 + daysInMonth * 38, 1200)}}>
               <thead>
                 <tr>
                   <th style={{position:'sticky',left:0,background:'var(--surface2)',zIndex:2,minWidth:140}}>Ученик</th>
@@ -1579,8 +1686,8 @@ function ClassesView({ user }) {
   const [editCls, setEditCls] = useState(null);
   const [editForm, setEditForm] = useState({ name:'', subject:'', teacherId:'', color:'' });
   const [editErr, setEditErr] = useState('');
-  const canManage = ['center_admin','super_admin','teacher'].includes(user.role);
-  const isAdmin = ['center_admin','super_admin'].includes(user.role);
+  const canManage = ['super_admin','teacher'].includes(user.role);
+  const isAdmin = user.role === 'super_admin';
   const toast = useToast();
   const confirm = useConfirm();
 
@@ -1676,7 +1783,7 @@ function ClassesView({ user }) {
             <form onSubmit={enroll}>
               <div className="fg"><label className="fl">Выберите учеников</label>
                 <select className="fi" multiple style={{height:180}} value={enrollIds} onChange={e=>setEnrollIds([...e.target.selectedOptions].map(o=>o.value))}>
-                  {available.map(s=><option key={s.id} value={s.id}>{s.name}{s.email ? ` (${s.email})` : ''}</option>)}
+                  {available.map(s=><option key={s.id} value={s.id}>{s.name} ({s.email})</option>)}
                 </select>
                 <div style={{fontSize:10,color:'var(--muted)',marginTop:4}}>Ctrl+клик для выбора нескольких</div>
               </div>
@@ -1693,11 +1800,11 @@ function ClassesView({ user }) {
 
   return (
     <div className="fade">
-      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-        <div><div className="pt">Классы</div><div className="ps">{canManage?'Управление классами и учениками':'Ваши классы'}</div></div>
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
+        <div style={{minWidth:0,flex:1}}><div className="pt">Классы</div><div className="ps">{canManage?'Управление классами и учениками':'Ваши классы'}</div></div>
         {canManage && <button className="btn btn-p" onClick={()=>setShowCreate(true)}>+ Создать класс</button>}
       </div>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(300px,1fr))',gap:14}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(min(300px,100%),1fr))',gap:14}}>
         {(classes||[]).map(c=>(
           <div className="card" key={c.id} style={{cursor:'pointer',transition:'all .2s'}} onClick={()=>loadDetail(c.id)}>
             <div style={{padding:'14px 16px'}}>
@@ -1791,7 +1898,7 @@ function GradeModal({ submission, assignment, onGrade, onClose }) {
 
   return (
     <div className="overlay" onClick={onClose}>
-      <div className="modal" style={{maxWidth:500}} onClick={e=>e.stopPropagation()}>
+      <div className="modal" style={{maxWidth:'min(500px, 92vw)'}} onClick={e=>e.stopPropagation()}>
         <div className="modal-t">Оценить работу</div>
         <div className="modal-sub">{submission.student_name}</div>
 
@@ -1817,7 +1924,7 @@ function GradeModal({ submission, assignment, onGrade, onClose }) {
           <div style={{fontSize:13,fontWeight:600,marginBottom:10}}>Выберите оценку:</div>
           <div style={{
             display:'grid',
-            gridTemplateColumns: gradingScale === '10-point' ? 'repeat(5, 1fr)' : 'repeat(10, 1fr)',
+            gridTemplateColumns: gradingScale === '10-point' ? 'repeat(5, 1fr)' : 'repeat(auto-fill, minmax(40px, 1fr))',
             gap:8
           }}>
             {buttons.map(score => (
@@ -1904,56 +2011,138 @@ function GradeModal({ submission, assignment, onGrade, onClose }) {
   );
 }
 
-// ·· SUBMIT WORK MODAL
-function SubmitWorkModal({ assignment, onClose, onSubmit }) {
-  const [answer, setAnswer] = useState('');
-  const [file, setFile] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState('');
-
-  async function submit(e) {
-    e.preventDefault(); setErr('');
-    if (!answer.trim() && !file) return setErr('Введите текстовый ответ или прикрепите файл');
-    setLoading(true);
-    try { await onSubmit(assignment.id, answer, file); }
-    catch(ex) { setErr(ex.message); setLoading(false); }
-  }
-
+// ·· ASSIGNMENTS VIEW
+// ── RETURN FEEDBACK MODAL (teacher returns work with comment) ─────────────────
+function ReturnFeedbackModal({ submission, onClose, onConfirm }) {
+  const [feedback, setFeedback] = useState('');
   return (
-    <Modal title={`📤 Сдать: ${assignment.title}`} onClose={onClose}>
-      <div style={{fontSize:12,color:'var(--muted)',marginBottom:12}}>
-        {assignment.class_name} · до {fmtDate(assignment.due_date)} · Макс: {assignment.max_score} баллов
+    <div className="overlay" onClick={onClose}>
+      <div className="modal fade" onClick={e=>e.stopPropagation()} style={{maxWidth:440}}>
+        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16}}>
+          <div style={{fontSize:28}}>↩️</div>
+          <div>
+            <div style={{fontWeight:800,fontSize:16}}>Вернуть работу</div>
+            <div style={{fontSize:12,color:'var(--muted)'}}>{submission.student_name}</div>
+          </div>
+          <button onClick={onClose} style={{marginLeft:'auto',background:'none',border:'none',fontSize:20,cursor:'pointer',color:'var(--muted)'}}>✕</button>
+        </div>
+        <div className="fg">
+          <label className="fl">💬 Комментарий для ученика</label>
+          <textarea className="fi" rows={4} placeholder="Объясните что нужно исправить..." value={feedback} onChange={e=>setFeedback(e.target.value)} autoFocus/>
+        </div>
+        <div style={{display:'flex',gap:8,marginTop:8}}>
+          <button className="btn btn-d" style={{flex:1,justifyContent:'center'}} onClick={()=>onConfirm(feedback)}>↩ Вернуть на доработку</button>
+          <button className="btn btn-s" onClick={onClose} style={{padding:'10px 18px'}}>Отмена</button>
+        </div>
       </div>
-      {assignment.description && (
-        <div style={{background:'var(--surface2)',borderRadius:8,padding:'10px 12px',fontSize:12,marginBottom:12}}>
-          {assignment.description}
-        </div>
-      )}
-      <Alert msg={err}/>
-      <form onSubmit={submit}>
-        <div className="fg">
-          <label className="fl">Текстовый ответ</label>
-          <textarea className="fi" rows={4} value={answer} onChange={e=>setAnswer(e.target.value)} placeholder="Введите ваш ответ..."/>
-        </div>
-        <div className="fg">
-          <label className="fl">Прикрепить файл (PDF, Word, фото…)</label>
-          <input type="file" className="fi" style={{padding:'6px 8px'}}
-            accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.zip,.pptx,.xlsx"
-            onChange={e=>setFile(e.target.files[0])}/>
-          {file && <div style={{fontSize:11,color:'var(--primary)',marginTop:4}}>📎 {file.name}</div>}
-        </div>
-        <div style={{display:'flex',gap:8,marginTop:4}}>
-          <button type="submit" className="btn btn-p" style={{flex:1}} disabled={loading}>
-            {loading ? 'Отправка...' : '📤 Сдать работу'}
-          </button>
-          <button type="button" className="btn btn-s" onClick={onClose}>Отмена</button>
-        </div>
-      </form>
-    </Modal>
+    </div>
   );
 }
 
-// ·· ASSIGNMENTS VIEW
+// ── SUBMIT MODAL (student homework submission) ─────────────────────────────
+function SubmitModal({ assignment, onClose, onSuccess }) {
+  const [textAnswer, setTextAnswer] = useState('');
+  const [comment, setComment] = useState('');
+  const [file, setFile] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState('');
+  const fileRef = React.useRef();
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!textAnswer.trim() && !file) { setErr('Напишите ответ или прикрепите файл'); return; }
+    setErr(''); setSubmitting(true);
+    try {
+      const fd = new FormData();
+      fd.append('assignmentId', assignment.id);
+      if (textAnswer.trim()) fd.append('textAnswer', textAnswer.trim());
+      if (comment.trim()) fd.append('comment', comment.trim());
+      if (file) fd.append('file', file);
+      await API.postForm('/api/submissions', fd);
+      onSuccess();
+    } catch(ex) { setErr(ex.message); }
+    setSubmitting(false);
+  }
+
+  const ALLOWED = '.pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.zip,.pptx,.xlsx';
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="modal fade" onClick={e=>e.stopPropagation()} style={{maxWidth:500}}>
+        {/* Header */}
+        <div style={{display:'flex',alignItems:'flex-start',gap:12,marginBottom:18}}>
+          <div style={{width:44,height:44,borderRadius:12,background:typeBg(assignment.type),display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,flexShrink:0}}>
+            {typeIco(assignment.type)}
+          </div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontWeight:800,fontSize:16,marginBottom:2}}>{assignment.title}</div>
+            <div style={{fontSize:12,color:'var(--muted)'}}>{assignment.class_name} · до {fmtDate(assignment.due_date)} · Макс: {assignment.max_score}</div>
+          </div>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:'var(--muted)',lineHeight:1,padding:'0 0 0 8px'}}>✕</button>
+        </div>
+
+        {/* Task description (if any) */}
+        {assignment.description && (
+          <div style={{background:'var(--bg2)',borderRadius:10,padding:'10px 14px',marginBottom:16,fontSize:13,color:'var(--text)',lineHeight:1.6,borderLeft:'3px solid var(--primary)'}}>
+            {assignment.description}
+          </div>
+        )}
+
+        {err && <Alert msg={err}/>}
+
+        <form onSubmit={handleSubmit}>
+          {/* Text answer */}
+          <div className="fg">
+            <label className="fl">✍️ Текстовый ответ</label>
+            <textarea
+              className="fi"
+              rows={5}
+              placeholder="Напишите ваш ответ здесь..."
+              value={textAnswer}
+              onChange={e=>setTextAnswer(e.target.value)}
+              style={{resize:'vertical',lineHeight:1.6}}
+            />
+          </div>
+
+          {/* File attachment */}
+          <div className="fg">
+            <label className="fl">📎 Прикрепить файл <span style={{fontWeight:400,color:'var(--muted)'}}>— необязательно</span></label>
+            <input type="file" accept={ALLOWED} ref={fileRef} style={{display:'none'}} onChange={e=>setFile(e.target.files[0]||null)}/>
+            {file ? (
+              <div style={{display:'flex',alignItems:'center',gap:10,background:'var(--primary-light)',border:'1px solid hsl(160,40%,80%)',borderRadius:8,padding:'10px 14px'}}>
+                <span style={{fontSize:22}}>📄</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:13,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{file.name}</div>
+                  <div style={{fontSize:11,color:'var(--muted)'}}>{(file.size/1024).toFixed(0)} KB</div>
+                </div>
+                <button type="button" onClick={()=>{setFile(null);fileRef.current.value='';}} style={{background:'none',border:'none',fontSize:16,cursor:'pointer',color:'var(--muted)'}}>✕</button>
+              </div>
+            ) : (
+              <button type="button" onClick={()=>fileRef.current.click()} className="btn btn-s" style={{width:'100%',justifyContent:'center',gap:8,padding:'10px'}}>
+                <span>📂</span> Выбрать файл
+              </button>
+            )}
+            <div style={{fontSize:11,color:'var(--muted)',marginTop:4}}>PDF, Word, TXT, изображения, ZIP — до 10 МБ</div>
+          </div>
+
+          {/* Comment */}
+          <div className="fg">
+            <label className="fl">💬 Комментарий учителю <span style={{fontWeight:400,color:'var(--muted)'}}>— необязательно</span></label>
+            <input className="fi" placeholder="Например: работал над этим 2 часа..." value={comment} onChange={e=>setComment(e.target.value)}/>
+          </div>
+
+          <div style={{display:'flex',gap:8,marginTop:4}}>
+            <button type="submit" className="btn btn-p" style={{flex:1,justifyContent:'center',padding:'11px'}} disabled={submitting}>
+              {submitting ? '⏳ Отправка...' : '🚀 Сдать работу'}
+            </button>
+            <button type="button" className="btn btn-s" onClick={onClose} style={{padding:'11px 20px'}}>Отмена</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function AssignmentsView({ user }) {
   const { data: classes } = useApi(() => API.get('/api/classes'));
   const [classFilter, setClassFilter] = useState('');
@@ -1967,6 +2156,7 @@ function AssignmentsView({ user }) {
   const [viewAssign, setViewAssign] = useState(null);
   const [subs, setSubs] = useState(null);
   const [gradingSubmission, setGradingSubmission] = useState(null); // Для GradeModal
+  const [submitModal, setSubmitModal] = useState(null); // assignment object to submit
   const toast = useToast();
   const confirm = useConfirm();
 
@@ -2006,29 +2196,19 @@ function AssignmentsView({ user }) {
     setGradingSubmission(submission);
   }
 
-  async function returnSubmission(subId) {
-    const feedback = prompt('Комментарий для ученика:');
-    if (feedback === null) return;
+  const [returnFeedbackModal, setReturnFeedbackModal] = useState(null); // submission to return
+
+  async function doReturn(subId, feedback) {
     try { await API.patch(`/api/submissions/${subId}/return`, { feedback }); viewSubmissions(viewAssign); toast('Работа возвращена', 'success'); } catch(ex) { alert(ex.message); }
   }
 
-  const [submitModal, setSubmitModal] = useState(null); // assignment object
-
-  // Student submit
-  async function submitWork(assignment, e) {
-    if (e) e.stopPropagation();
-    setSubmitModal(assignment);
+  function returnSubmission(sub) {
+    setReturnFeedbackModal(sub);
   }
 
-  async function doSubmit(assignmentId, textAnswer, file) {
-    const fd = new FormData();
-    fd.append('assignmentId', assignmentId);
-    if (textAnswer) fd.append('textAnswer', textAnswer);
-    if (file) fd.append('file', file);
-    await API.post('/api/submissions', fd, true);
-    reload();
-    toast('Работа сдана! ✅', 'success');
-    setSubmitModal(null);
+  // Student submit — opens modal
+  function submitWork(assignment) {
+    setSubmitModal(assignment);
   }
 
   if (loading) return <Spinner/>;
@@ -2042,37 +2222,53 @@ function AssignmentsView({ user }) {
         <div className="card">
           <div className="ch"><div className="ct">Сданные работы ({subs.submissions?.length||0})</div></div>
           <div className="cb" style={{padding:0}}>
-            <table className="tbl">
-              <thead><tr><th>Ученик</th><th>Ответ</th><th>Файл</th><th>Дата</th><th>Балл</th><th>Статус</th><th>Действия</th></tr></thead>
-              <tbody>
-                {(subs.submissions||[]).map(s=>(
-                  <tr key={s.id}>
-                    <td style={{fontWeight:600}}>{s.student_name}</td>
-                    <td style={{maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:11}}>{s.text_answer||'—'}</td>
-                    <td>{s.file_name ? <a href={`/uploads/${s.file_path}`} target="_blank" style={{color:'var(--accent)',fontSize:11}}>📎 {s.file_name}</a> : '—'}</td>
-                    <td style={{fontSize:11,color:'var(--muted)'}}>{fmtDate(s.submitted_at)}</td>
-                    <td>
-                      {s.score!==null ? (
-                        <span style={{
-                          fontWeight:700,
-                          color:getGradeColor(s.score, viewAssign.grading_scale),
-                          fontSize:13
-                        }}>
-                          {getGradeIcon(s.score, viewAssign.grading_scale)} {s.score}/{viewAssign.max_score}
-                        </span>
-                      ) : '—'}
-                    </td>
-                    <td><span className={`bdg ${s.status==='graded'?'bg':s.status==='submitted'?'ba':s.status==='returned'?'br':'bk'}`}>{s.status==='graded'?'Проверено':s.status==='submitted'?'Сдано':s.status==='returned'?'Возвращено':'—'}</span></td>
-                    <td>
-                      {s.status==='submitted' && <>
-                        <button className="btn btn-p btn-sm" style={{marginRight:4}} onClick={()=>openGradeModal(s)}>✓ Оценить</button>
-                        <button className="btn btn-d btn-sm" onClick={()=>returnSubmission(s.id)}>↩</button>
-                      </>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <ResponsiveTable
+              headers={['Ученик','Ответ','Файл','Дата','Балл','Статус','Действия']}
+              rows={subs.submissions||[]}
+              emptyIcon="📝" emptyText="Нет сданных работ"
+              renderRow={s=>(
+                <tr key={s.id}>
+                  <td style={{fontWeight:600}}>{s.student_name}</td>
+                  <td style={{maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:11}}>{s.text_answer||'—'}</td>
+                  <td>{s.file_name ? <a href={`/uploads/${s.file_path}`} target="_blank" style={{color:'var(--accent)',fontSize:11}}>📎 {s.file_name}</a> : '—'}</td>
+                  <td style={{fontSize:11,color:'var(--muted)'}}>{fmtDate(s.submitted_at)}</td>
+                  <td>
+                    {s.score!==null ? (
+                      <span style={{fontWeight:700,color:getGradeColor(s.score, viewAssign.grading_scale),fontSize:13}}>
+                        {getGradeIcon(s.score, viewAssign.grading_scale)} {s.score}/{viewAssign.max_score}
+                      </span>
+                    ) : '—'}
+                  </td>
+                  <td><span className={`bdg ${s.status==='graded'?'bg':s.status==='submitted'?'ba':s.status==='returned'?'br':'bk'}`}>{s.status==='graded'?'Проверено':s.status==='submitted'?'Сдано':s.status==='returned'?'Возвращено':'—'}</span></td>
+                  <td>
+                    {s.status==='submitted' && <>
+                      <button className="btn btn-p btn-sm" style={{marginRight:4}} onClick={()=>openGradeModal(s)}>✓ Оценить</button>
+                      <button className="btn btn-d btn-sm" onClick={()=>returnSubmission(s)}>↩</button>
+                    </>}
+                  </td>
+                </tr>
+              )}
+              renderCard={s=>(
+                <div key={s.id} className="card" style={{padding:'12px 14px',marginBottom:8}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6}}>
+                    <div style={{fontWeight:700,fontSize:14}}>{s.student_name}</div>
+                    <span className={`bdg ${s.status==='graded'?'bg':s.status==='submitted'?'ba':s.status==='returned'?'br':'bk'}`}>{s.status==='graded'?'Проверено':s.status==='submitted'?'Сдано':s.status==='returned'?'Возвращено':'—'}</span>
+                  </div>
+                  {s.text_answer && <div style={{fontSize:12,color:'var(--muted)',marginBottom:6,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.text_answer}</div>}
+                  <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',fontSize:12}}>
+                    {s.file_name && <a href={`/uploads/${s.file_path}`} target="_blank" style={{color:'var(--accent)'}}>📎 {s.file_name}</a>}
+                    <span style={{color:'var(--muted)'}}>{fmtDate(s.submitted_at)}</span>
+                    {s.score!==null && <span style={{fontWeight:700,color:getGradeColor(s.score, viewAssign.grading_scale)}}>{getGradeIcon(s.score, viewAssign.grading_scale)} {s.score}/{viewAssign.max_score}</span>}
+                  </div>
+                  {s.status==='submitted' && (
+                    <div style={{display:'flex',gap:6,marginTop:8}}>
+                      <button className="btn btn-p btn-sm" onClick={()=>openGradeModal(s)}>✓ Оценить</button>
+                      <button className="btn btn-d btn-sm" onClick={()=>returnSubmission(s)}>↩ Вернуть</button>
+                    </div>
+                  )}
+                </div>
+              )}
+            />
           </div>
         </div>
         {subs.notSubmitted?.length>0 && (
@@ -2083,14 +2279,22 @@ function AssignmentsView({ user }) {
             </div>
           </div>
         )}
+
+        {returnFeedbackModal && (
+          <ReturnFeedbackModal
+            submission={returnFeedbackModal}
+            onClose={()=>setReturnFeedbackModal(null)}
+            onConfirm={feedback=>{ setReturnFeedbackModal(null); doReturn(returnFeedbackModal.id, feedback); }}
+          />
+        )}
       </div>
     );
   }
 
   return (
     <div className="fade">
-      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-        <div><div className="pt">Задания</div><div className="ps">{canCreate?'Управление заданиями':'Ваши задания'}</div></div>
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
+        <div style={{minWidth:0,flex:1}}><div className="pt">Задания</div><div className="ps">{canCreate?'Управление заданиями':'Ваши задания'}</div></div>
         {canCreate && <button className="btn btn-p" onClick={()=>setShowCreate(true)}>+ Создать задание</button>}
       </div>
       {classes?.length>1 && (
@@ -2138,7 +2342,7 @@ function AssignmentsView({ user }) {
                           {a.submission_status==='submitted'?'Сдано':a.submission_status==='returned'?'Возвращено':'—'}
                         </span>
                     )
-                  : <button className="btn btn-p btn-sm" onClick={e=>{e.stopPropagation();submitWork(a,e);}}>Сдать</button>
+                  : <button className="btn btn-p btn-sm" onClick={e=>{e.stopPropagation();submitWork(a);}}>Сдать</button>
               )}
               {canCreate && <button className="btn btn-d btn-sm" onClick={e=>{e.stopPropagation();deleteAssign(a.id);}}>🗑</button>}
             </div>
@@ -2147,14 +2351,14 @@ function AssignmentsView({ user }) {
       </div>
       {(!assignments||!assignments.length)&&<div className="empty"><div className="empty-ico">📋</div>Нет заданий</div>}
 
-      {/* Submit work modal */}
       {submitModal && (
-        <SubmitWorkModal
+        <SubmitModal
           assignment={submitModal}
           onClose={()=>setSubmitModal(null)}
-          onSubmit={doSubmit}
+          onSuccess={()=>{ setSubmitModal(null); reload(); toast('Работа сдана! 🎉','success'); }}
         />
       )}
+
       {showCreate && (
         <Modal title="Создать задание" onClose={()=>setShowCreate(false)}>
           <Alert msg={err}/>
@@ -2244,8 +2448,8 @@ function GradebookView({ user }) {
 
   return (
     <div className="fade">
-      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-        <div><div className="pt">Журнал оценок</div><div className="ps">Электронный классный журнал</div></div>
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
+        <div style={{minWidth:0,flex:1}}><div className="pt">Журнал оценок</div><div className="ps">Электронный классный журнал</div></div>
         {classId && <a href={`/api/grades/class/${classId}/export`} className="btn btn-s">📥 CSV</a>}
       </div>
       <div style={{marginBottom:14}}>
@@ -2254,7 +2458,7 @@ function GradebookView({ user }) {
         </select>
       </div>
       {loading ? <Spinner/> : gb ? (
-        <div className="card" style={{overflowX:'auto'}}>
+        <div className="card" style={{overflowX:'auto',WebkitOverflowScrolling:'touch'}}>
           <div className="cb" style={{padding:0}}>
             <table className="tbl" style={{fontSize:11}}>
               <thead>
@@ -2298,8 +2502,8 @@ function NotificationsPage({ onRead }) {
 
   return (
     <div className="fade">
-      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-        <div><div className="pt">Уведомления</div><div className="ps">Все ваши уведомления</div></div>
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
+        <div style={{minWidth:0,flex:1}}><div className="pt">Уведомления</div><div className="ps">Все ваши уведомления</div></div>
         {notifs.length>0 && <button className="btn btn-s" onClick={readAll}>Прочитать все</button>}
       </div>
       {loading ? <Spinner/> : notifs.length===0 ? <div className="empty"><div className="empty-ico">🔔</div>Нет уведомлений</div> : (
@@ -2326,11 +2530,27 @@ function NotificationsPage({ onRead }) {
 // ·· PROFILE PAGE
 function ProfilePage({ user, onLogout, onNameChange }) {
   const [name, setName] = useState(user.name);
+  const [email, setEmail] = useState(user.email);
   const [saving, setSaving] = useState(false);
+  const [emailSaving, setEmailSaving] = useState(false);
   const [pwForm, setPwForm] = useState({ currentPassword:'', newPassword:'' });
   const [pwErr, setPwErr] = useState('');
   const [pwOk, setPwOk] = useState(false);
   const toast = useToast();
+
+  // Avatar: stored in localStorage, keyed by user id
+  const AVATAR_EMOJIS = ['😊','🦁','🐯','🐻','🦊','🐸','🐧','🦋','🌟','🚀','🎯','🎨','🎵','💡','🌈'];
+  const AVATAR_COLORS = ['hsl(160,50%,40%)','hsl(220,60%,55%)','hsl(280,55%,55%)','hsl(340,60%,55%)','hsl(30,70%,50%)','hsl(190,60%,45%)'];
+  const storedAvatar = JSON.parse(localStorage.getItem(`avatar_${user.id}`) || 'null');
+  const [avatarEmoji, setAvatarEmoji] = useState(storedAvatar?.emoji || '');
+  const [avatarColor, setAvatarColor] = useState(storedAvatar?.color || avaColor(user.role));
+  const [showAvatarPicker, setShowAvatarPicker] = useState(false);
+
+  function saveAvatar(emoji, color) {
+    localStorage.setItem(`avatar_${user.id}`, JSON.stringify({ emoji, color }));
+    setAvatarEmoji(emoji); setAvatarColor(color); setShowAvatarPicker(false);
+    toast('Аватар обновлён', 'success');
+  }
 
   async function saveName(e) {
     e.preventDefault(); setSaving(true);
@@ -2338,10 +2558,19 @@ function ProfilePage({ user, onLogout, onNameChange }) {
     setSaving(false);
   }
 
+  async function saveEmail(e) {
+    e.preventDefault(); setEmailSaving(true);
+    try { await API.patch('/api/users/me', { email }); toast('Email обновлён','success'); } catch(ex) { alert(ex.message); }
+    setEmailSaving(false);
+  }
+
   async function changePassword(e) {
     e.preventDefault(); setPwErr(''); setPwOk(false);
     try { await API.patch('/api/auth/password', pwForm); setPwOk(true); setPwForm({currentPassword:'',newPassword:''}); toast('Пароль изменён','success'); } catch(ex) { setPwErr(ex.message); }
   }
+
+  const displayEmoji = avatarEmoji;
+  const displayColor = avatarColor;
 
   return (
     <div className="fade">
@@ -2349,16 +2578,46 @@ function ProfilePage({ user, onLogout, onNameChange }) {
       <div className="g2">
         <div className="card" style={{padding:'18px'}}>
           <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:18}}>
-            <div className="ava" style={{width:56,height:56,fontSize:20,background:avaColor(user.role)}}>{initials(user.name)}</div>
+            <div style={{position:'relative',cursor:'pointer'}} onClick={()=>setShowAvatarPicker(v=>!v)}>
+              <div className="ava" style={{width:56,height:56,fontSize:displayEmoji?26:20,background:displayColor}}>
+                {displayEmoji || initials(user.name)}
+              </div>
+              <div style={{position:'absolute',bottom:-2,right:-2,background:'var(--primary)',color:'#fff',borderRadius:'50%',width:18,height:18,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10}}>✏️</div>
+            </div>
             <div>
               <div style={{fontWeight:800,fontSize:16}}>{user.name}</div>
               <div style={{fontSize:12,color:'var(--muted)'}}>{user.email}</div>
               <span className="bdg bp" style={{marginTop:4}}>{roleLabel[user.role]}</span>
             </div>
           </div>
-          <form onSubmit={saveName}>
+          {showAvatarPicker && (
+            <div style={{background:'var(--bg2)',borderRadius:10,padding:14,marginBottom:14,border:'1px solid var(--border)'}}>
+              <div style={{fontWeight:600,fontSize:12,marginBottom:8,color:'var(--muted)'}}>Выберите эмодзи</div>
+              <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:12}}>
+                {AVATAR_EMOJIS.map(e=>(
+                  <button key={e} onClick={()=>setAvatarEmoji(e)} style={{fontSize:22,background:avatarEmoji===e?'var(--primary-light)':'transparent',border:avatarEmoji===e?'2px solid var(--primary)':'2px solid transparent',borderRadius:8,padding:'2px 4px',cursor:'pointer'}}>{e}</button>
+                ))}
+                <button onClick={()=>setAvatarEmoji('')} style={{fontSize:12,background:!avatarEmoji?'var(--primary-light)':'transparent',border:!avatarEmoji?'2px solid var(--primary)':'2px solid var(--border)',borderRadius:8,padding:'2px 8px',cursor:'pointer',color:'var(--muted)'}}>Инициалы</button>
+              </div>
+              <div style={{fontWeight:600,fontSize:12,marginBottom:8,color:'var(--muted)'}}>Цвет фона</div>
+              <div style={{display:'flex',gap:6,marginBottom:12}}>
+                {AVATAR_COLORS.map(c=>(
+                  <button key={c} onClick={()=>setAvatarColor(c)} style={{width:28,height:28,borderRadius:'50%',background:c,border:avatarColor===c?'3px solid var(--text)':'3px solid transparent',cursor:'pointer'}}/>
+                ))}
+              </div>
+              <div style={{display:'flex',gap:8}}>
+                <button className="btn btn-p btn-sm" onClick={()=>saveAvatar(avatarEmoji,avatarColor)}>Сохранить</button>
+                <button className="btn btn-s btn-sm" onClick={()=>setShowAvatarPicker(false)}>Отмена</button>
+              </div>
+            </div>
+          )}
+          <form onSubmit={saveName} style={{marginBottom:12}}>
             <div className="fg"><label className="fl">Имя</label><input className="fi" value={name} onChange={e=>setName(e.target.value)} required/></div>
             <button type="submit" className="btn btn-p" disabled={saving} style={{width:'100%',justifyContent:'center'}}>{saving?'...':'Сохранить имя'}</button>
+          </form>
+          <form onSubmit={saveEmail}>
+            <div className="fg"><label className="fl">Email</label><input className="fi" type="email" value={email} onChange={e=>setEmail(e.target.value)} required/></div>
+            <button type="submit" className="btn btn-s" disabled={emailSaving} style={{width:'100%',justifyContent:'center'}}>{emailSaving?'...':'Изменить email'}</button>
           </form>
         </div>
         <div className="card" style={{padding:'18px'}}>
@@ -2427,7 +2686,7 @@ function UsersView({ user }) {
       {isSuperAdmin && centers?.length > 0 && (
         <div style={{marginBottom:14,display:'flex',alignItems:'center',gap:10}}>
           <label style={{fontSize:12,fontWeight:600,color:'var(--muted)'}}>Центр:</label>
-          <select className="fi" style={{width:280}} value={effectiveCenterId||''} onChange={e=>setCenterId(parseInt(e.target.value))}>
+          <select className="fi" style={{width:'100%',maxWidth:320}} value={effectiveCenterId||''} onChange={e=>setCenterId(parseInt(e.target.value))}>
             {centers.map(c=><option key={c.id} value={c.id}>{c.name} ({c.code})</option>)}
           </select>
         </div>
@@ -2443,30 +2702,49 @@ function UsersView({ user }) {
       {loading ? <Spinner/> : (
         <div className="card">
           <div className="cb" style={{padding:0}}>
-            <table className="tbl">
-              <thead><tr><th>Имя</th><th>Email</th><th>Роль</th><th>Статус</th><th>Создан</th>{tab==='parent'&&<th>Дети</th>}<th style={{width:80}}>Действия</th></tr></thead>
-              <tbody>
-                {(users||[]).filter(u => {
-                  if (!search.trim()) return true;
-                  const q = search.toLowerCase();
-                  return u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
-                }).map(u=>(
-                  <tr key={u.id}>
-                    <td><div style={{display:'flex',alignItems:'center',gap:8}}>
-                      <div className="ava" style={{width:28,height:28,fontSize:11,background:avaColor(u.role)}}>{initials(u.name)}</div>
-                      <span style={{fontWeight:600}}>{u.name}</span>
-                    </div></td>
-                    <td style={{color:'var(--muted)',fontSize:12}}>{u.email}</td>
-                    <td><span className={`bdg ${u.role==='teacher'?'bp':u.role==='student'?'bg':u.role==='parent'?'ba':'bb'}`}>{roleLabel[u.role]}</span></td>
-                    <td><span className={`bdg ${u.is_active?'bg':'br'}`}>{u.is_active?'Активен':'Заблокирован'}</span></td>
-                    <td style={{fontSize:11,color:'var(--muted)'}}>{fmtDate(u.created_at)}</td>
-                    {tab==='parent'&&<td><button className="btn btn-sm btn-s" onClick={()=>{setLinkParent(u);setLinkStudentId('');setLinkErr('');}}>+ Ребёнок</button></td>}
-                    <td><button className="btn btn-sm btn-s" onClick={()=>{setResetUser(u);setResetPw('');setResetErr('');setResetOk(false);}} title="Сбросить пароль">🔑</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {(!users||!users.length)&&<div className="empty"><div className="empty-ico">👥</div>Нет пользователей</div>}
+            <ResponsiveTable
+              headers={['Имя','Email','Роль','Статус','Создан',...(tab==='parent'?['Дети']:[]),'Действия']}
+              rows={(users||[]).filter(u => {
+                if (!search.trim()) return true;
+                const q = search.toLowerCase();
+                return u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+              })}
+              emptyIcon="👥" emptyText="Нет пользователей"
+              renderRow={u=>(
+                <tr key={u.id}>
+                  <td><div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <div className="ava" style={{width:28,height:28,fontSize:11,background:avaColor(u.role)}}>{initials(u.name)}</div>
+                    <span style={{fontWeight:600}}>{u.name}</span>
+                  </div></td>
+                  <td style={{color:'var(--muted)',fontSize:12}}>{u.email}</td>
+                  <td><span className={`bdg ${u.role==='teacher'?'bp':u.role==='student'?'bg':u.role==='parent'?'ba':'bb'}`}>{roleLabel[u.role]}</span></td>
+                  <td><span className={`bdg ${u.is_active?'bg':'br'}`}>{u.is_active?'Активен':'Заблокирован'}</span></td>
+                  <td style={{fontSize:11,color:'var(--muted)'}}>{fmtDate(u.created_at)}</td>
+                  {tab==='parent'&&<td><button className="btn btn-sm btn-s" onClick={()=>{setLinkParent(u);setLinkStudentId('');setLinkErr('');}}>+ Ребёнок</button></td>}
+                  <td><button className="btn btn-sm btn-s" onClick={()=>{setResetUser(u);setResetPw('');setResetErr('');setResetOk(false);}} title="Сбросить пароль">🔑</button></td>
+                </tr>
+              )}
+              renderCard={u=>(
+                <div key={u.id} className="card" style={{padding:'12px 14px',marginBottom:8}}>
+                  <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+                    <div className="ava" style={{width:36,height:36,fontSize:13,background:avaColor(u.role)}}>{initials(u.name)}</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontWeight:700,fontSize:14}}>{u.name}</div>
+                      <div style={{fontSize:12,color:'var(--muted)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{u.email}</div>
+                    </div>
+                    <span className={`bdg ${u.is_active?'bg':'br'}`}>{u.is_active?'Активен':'Забл.'}</span>
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                    <span className={`bdg ${u.role==='teacher'?'bp':u.role==='student'?'bg':u.role==='parent'?'ba':'bb'}`}>{roleLabel[u.role]}</span>
+                    <span style={{fontSize:11,color:'var(--muted)'}}>{fmtDate(u.created_at)}</span>
+                    <div style={{marginLeft:'auto',display:'flex',gap:6}}>
+                      {tab==='parent'&&<button className="btn btn-sm btn-s" onClick={()=>{setLinkParent(u);setLinkStudentId('');setLinkErr('');}}>+ Ребёнок</button>}
+                      <button className="btn btn-sm btn-s" onClick={()=>{setResetUser(u);setResetPw('');setResetErr('');setResetOk(false);}}>🔑</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            />
           </div>
         </div>
       )}
@@ -2478,7 +2756,7 @@ function UsersView({ user }) {
             <div className="fg"><label className="fl">Ученик</label>
               <select className="fi" required value={linkStudentId} onChange={e=>setLinkStudentId(e.target.value)}>
                 <option value="">— выберите ученика —</option>
-                {(students||[]).map(s=><option key={s.id} value={s.id}>{s.name}{s.email ? ` (${s.email})` : ``}</option>)}
+                {(students||[]).map(s=><option key={s.id} value={s.id}>{s.name} ({s.email})</option>)}
               </select>
             </div>
             <div style={{display:'flex',gap:8,marginTop:14}}>
@@ -2568,11 +2846,17 @@ function ScheduleView({ user }) {
   const [err, setErr] = useState('');
   const toast = useToast();
   const confirm = useConfirm();
-  const canManage = ['teacher','center_admin','super_admin'].includes(user.role);
+  const canManage = ['teacher','super_admin'].includes(user.role);
   const set = k => e => setForm(p=>({...p,[k]:e.target.value}));
 
+  // Normalize: API always returns a flat array; parent early-exit returns {schedules,byDay}
+  const schedules = Array.isArray(data) ? data : (data?.schedules || []);
+  const byDay = Array.isArray(data)
+    ? schedules.reduce((acc, s) => { (acc[s.day_of_week] = acc[s.day_of_week] || []).push(s); return acc; }, {})
+    : (data?.byDay || {});
+
   // Collect all unique time slots across the schedule
-  const allSlots = (data?.schedules || []).map(s => s.start_time).filter((v,i,a)=>a.indexOf(v)===i).sort();
+  const allSlots = schedules.map(s => s.start_time).filter((v,i,a)=>a.indexOf(v)===i).sort();
 
   async function create(e) {
     e.preventDefault(); setErr('');
@@ -2593,8 +2877,8 @@ function ScheduleView({ user }) {
 
   return (
     <div className="fade">
-      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-        <div><div className="pt">Расписание</div><div className="ps">{data?.schedules?.length || 0} уроков в неделю</div></div>
+      <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
+        <div style={{minWidth:0,flex:1}}><div className="pt">Расписание</div><div className="ps">{schedules.length} уроков в неделю</div></div>
         {canManage && <button className="btn btn-p" onClick={()=>setShowCreate(true)}>+ Добавить урок</button>}
       </div>
       {user.role==='parent' && children?.length>1 && (
@@ -2619,12 +2903,12 @@ function ScheduleView({ user }) {
               <React.Fragment key={time}>
                 <div className="sched-time">{time}</div>
                 {[1,2,3,4,5,6].map(d => {
-                  const items = (data?.byDay?.[d] || []).filter(s => s.start_time === time);
+                  const items = (byDay[d] || []).filter(s => s.start_time === time);
                   return (
                     <div className="sched-cell" key={d}>
                       {items.map(s => (
-                        <div key={s.id} className="sched-item" style={{borderLeftColor:s.color||'var(--accent)',background:(s.color||'#6366f1')+'18'}}
-                          onClick={()=>canManage && deleteEntry(s.id)} title={canManage?'Нажмите чтобы удалить':''}>
+                        <div key={s.id} className="sched-item tap-safe" style={{borderLeftColor:s.color||'var(--accent)',background:(s.color||'#6366f1')+'18'}}
+                          onClick={()=>canManage && deleteEntry(s.id)} onContextMenu={e=>e.preventDefault()} title={canManage?'Нажмите чтобы удалить':''}>
                           <div style={{fontWeight:700,fontSize:11}}>{s.class_name}</div>
                           <div style={{fontSize:10,color:'var(--muted)'}}>{s.start_time}-{s.end_time}{s.room?` · ${s.room}`:''}</div>
                           {s.teacher_name && <div style={{fontSize:10,color:'var(--muted)'}}>{s.teacher_name}</div>}
@@ -2642,14 +2926,14 @@ function ScheduleView({ user }) {
       {/* Mobile-friendly list */}
       <div style={{marginTop:16}}>
         {[1,2,3,4,5,6].map(d => {
-          const items = data?.byDay?.[d] || [];
+          const items = byDay[d] || [];
           if (!items.length) return null;
           return (
             <div key={d} style={{marginBottom:12}}>
               <div style={{fontWeight:700,fontSize:13,marginBottom:6,color:'var(--muted)'}}>{DAY_FULL[d]}</div>
               <div style={{display:'flex',flexDirection:'column',gap:6}}>
                 {items.map(s=>(
-                  <div key={s.id} className="card" style={{padding:'10px 14px',borderLeft:`4px solid ${s.color||'#6366f1'}`,display:'flex',alignItems:'center',gap:12}}>
+                  <div key={s.id} className="card tap-safe" style={{padding:'10px 14px',borderLeft:`4px solid ${s.color||'#6366f1'}`,display:'flex',alignItems:'center',gap:12}} onContextMenu={e=>e.preventDefault()}>
                     <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:'var(--accent)',fontWeight:600,minWidth:80}}>
                       {s.start_time} - {s.end_time}
                     </div>
@@ -2664,7 +2948,7 @@ function ScheduleView({ user }) {
             </div>
           );
         })}
-        {(!data?.schedules?.length) && <div className="empty" style={{marginTop:16}}><div className="empty-ico">🗓</div><div style={{fontWeight:600,fontSize:14,marginBottom:4}}>Расписание пока пустое</div><div style={{fontSize:12}}>Добавьте уроки в расписание</div></div>}
+        {!schedules.length && <div className="empty" style={{marginTop:16}}><div className="empty-ico">🗓</div><div style={{fontWeight:600,fontSize:14,marginBottom:4}}>Расписание пока пустое</div><div style={{fontSize:12}}>Добавьте уроки в расписание</div></div>}
       </div>
 
       {showCreate && (
@@ -2719,20 +3003,31 @@ function AuditLogView({ user }) {
       <div className="card">
         <div className="cb" style={{padding:0}}>
           {loading ? <Spinner/> : (
-            <table className="tbl">
-              <thead><tr><th>Время</th><th>Пользователь</th><th>Действие</th><th>Объект</th></tr></thead>
-              <tbody>
-                {logs.map(l=>(
-                  <tr key={l.id}>
-                    <td style={{fontSize:11,color:'var(--muted)',whiteSpace:'nowrap'}}>{fmtDate(l.created_at)}</td>
-                    <td style={{fontWeight:600,fontSize:12}}>{l.user_name||`ID:${l.user_id}`}</td>
-                    <td><span className={`bdg ${l.action?.includes('DELETE')?'br':l.action?.includes('POST')?'bg':'bb'}`} style={{fontSize:10,fontFamily:"'JetBrains Mono',monospace"}}>{l.action}</span></td>
-                    <td style={{fontSize:11,color:'var(--muted)'}}>{l.entity_type}{l.entity_id?` #${l.entity_id}`:''}</td>
-                  </tr>
-                ))}
-                {!logs.length && <tr><td colSpan={4}><div className="empty"><div className="empty-ico">📝</div>Нет записей</div></td></tr>}
-              </tbody>
-            </table>
+            <ResponsiveTable
+              headers={['Время','Пользователь','Действие','Объект']}
+              rows={logs}
+              emptyIcon="📝" emptyText="Нет записей"
+              renderRow={l=>(
+                <tr key={l.id}>
+                  <td style={{fontSize:11,color:'var(--muted)',whiteSpace:'nowrap'}}>{fmtDate(l.created_at)}</td>
+                  <td style={{fontWeight:600,fontSize:12}}>{l.user_name||`ID:${l.user_id}`}</td>
+                  <td><span className={`bdg ${l.action?.includes('DELETE')?'br':l.action?.includes('POST')?'bg':'bb'}`} style={{fontSize:10,fontFamily:"'JetBrains Mono',monospace"}}>{l.action}</span></td>
+                  <td style={{fontSize:11,color:'var(--muted)'}}>{l.entity_type}{l.entity_id?` #${l.entity_id}`:''}</td>
+                </tr>
+              )}
+              renderCard={l=>(
+                <div key={l.id} className="card" style={{padding:'10px 14px',marginBottom:6}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+                    <span style={{fontWeight:600,fontSize:13}}>{l.user_name||`ID:${l.user_id}`}</span>
+                    <span style={{fontSize:10,color:'var(--muted)'}}>{fmtDate(l.created_at)}</span>
+                  </div>
+                  <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                    <span className={`bdg ${l.action?.includes('DELETE')?'br':l.action?.includes('POST')?'bg':'bb'}`} style={{fontSize:10,fontFamily:"'JetBrains Mono',monospace"}}>{l.action}</span>
+                    <span style={{fontSize:11,color:'var(--muted)'}}>{l.entity_type}{l.entity_id?` #${l.entity_id}`:''}</span>
+                  </div>
+                </div>
+              )}
+            />
           )}
         </div>
       </div>
@@ -2755,6 +3050,7 @@ function AppShell({ user: initialUser, center, onLogout }) {
   const [page, setPage] = useState('dashboard');
   const [showNotif, setShowNotif] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const isMobile = useIsMobile();
   const { data: notifData, reload: reloadNotifs } = useApi(() => API.get('/api/notifications'));
   const unread = notifData?.unread ?? 0;
   const confirm = useConfirm();
@@ -2786,8 +3082,6 @@ function AppShell({ user: initialUser, center, onLogout }) {
       if (page==='tokens') return <TokensView/>;
       if (page==='users') return <UsersView user={user}/>;
       if (page==='classes') return <ClassesView user={user}/>;
-      if (page==='assignments') return <AssignmentsView user={user}/>;
-      if (page==='gradebook') return <GradebookView user={user}/>;
       if (page==='attendance') return <AttendanceView user={user}/>;
     }
     if (user.role==='teacher') {
@@ -2879,6 +3173,7 @@ function AppShell({ user: initialUser, center, onLogout }) {
         </div>
         <div className="content">{renderPage()}</div>
       </div>
+      {isMobile && <BottomNav nav={nav} page={page} setPage={setPage} unread={unread}/>}
     </div>
   );
 }
@@ -2897,7 +3192,7 @@ function Root() {
         setUser(data.user); setCenter(data.center || null); setAuthState('auth');
         // If center is missing (restored via refresh), fetch it
         if (!data.center && data.user) {
-          try { const me = await API.get('/api/auth/me'); setCenter(me.center); setUser(me.user); }
+          try { const me = await API.get('/api/auth/me'); setCenter(me.center); }
           catch {}
         }
       }
@@ -2918,10 +3213,12 @@ function Root() {
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <ErrorBoundary>
-    <ToastProvider>
-      <ConfirmProvider>
-        <Root/>
-      </ConfirmProvider>
-    </ToastProvider>
+    <MobileAppWrapper>
+      <ToastProvider>
+        <ConfirmProvider>
+          <Root/>
+        </ConfirmProvider>
+      </ToastProvider>
+    </MobileAppWrapper>
   </ErrorBoundary>
 );

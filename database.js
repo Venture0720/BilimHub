@@ -2,8 +2,11 @@
 require('dotenv').config();
 const bcrypt = require('bcryptjs');
 
-const env = process.env.NODE_ENV || 'development';
+const env = (process.env.NODE_ENV || process.env.VERCEL_ENV || 'development').trim();
 const config = require('./knexfile')[env];
+if (!config) {
+  throw new Error(`No knexfile config for env "${env}". Available: ${Object.keys(require('./knexfile')).join(', ')}`);
+}
 const knex = require('knex')(config);
 
 // ── Thin async helpers (backward-compatible surface for route files) ─────────

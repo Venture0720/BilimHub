@@ -19,7 +19,7 @@ router.get('/status', ...requireRole('super_admin'), async (req, res, next) => {
       'attendance', 'notifications', 'audit_logs', 'refresh_tokens', 'invite_tokens'];
     const counts = {};
     for (const t of tables) {
-      const row = await db.get(`SELECT COUNT(*)::int AS count FROM ${t}`);
+      const row = await db.get(`SELECT COUNT(*) AS count FROM ${t}`);
       counts[t] = row.count;
     }
 
@@ -74,5 +74,4 @@ router.get('/stats', ...requireRole('super_admin'), async (req, res, next) => {
 });
 
 module.exports = router;
-
 

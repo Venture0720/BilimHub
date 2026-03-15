@@ -19,10 +19,7 @@ module.exports = {
   production: {
     client: 'pg',
     connection: process.env.DATABASE_URL
-      ? {
-          connectionString: process.env.DATABASE_URL,
-          ssl: { rejectUnauthorized: false },
-        }
+      ? { connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } }
       : {
           host: process.env.DB_HOST,
           port: parseInt(process.env.DB_PORT || '5432'),
@@ -31,7 +28,7 @@ module.exports = {
           password: process.env.DB_PASSWORD,
           ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
         },
-    pool: { min: 2, max: 20 },
+    pool: { min: 0, max: 10 },
     migrations: { directory: './migrations' },
     seeds: { directory: './seeds' },
   },

@@ -24,9 +24,9 @@ if (DEFAULT_SECRETS.includes(process.env.JWT_ACCESS_SECRET) || DEFAULT_SECRETS.i
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ── Ensure uploads dir exists
-const UPLOADS_DIR = path.resolve(process.env.UPLOADS_DIR || './uploads');
-if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+// ── Ensure uploads dir exists (use /tmp in serverless environments)
+const UPLOADS_DIR = path.resolve(process.env.UPLOADS_DIR || (process.env.VERCEL ? '/tmp/uploads' : './uploads'));
+try { if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true }); } catch (e) { /* read-only fs in serverless */ }
 
 // ── Security & parsing middleware
 app.use(helmet({

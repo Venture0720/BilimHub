@@ -39,7 +39,7 @@ router.post('/', ...requireRole('center_admin', 'super_admin'), async (req, res,
       if (!student) return res.status(404).json({ error: 'Student not found in this center' });
     }
 
-    const token = crypto.randomBytes(16).toString('hex').toUpperCase();
+    const token = crypto.randomBytes(16).toString('hex');
     const expiresAt = new Date(Date.now() + (Math.min(parseInt(expiresInDays) || 7, 90)) * 86400000).toISOString();
 
     const result = await db.run(`
@@ -61,7 +61,7 @@ router.get('/validate/:token', validateLimiter, async (req, res, next) => {
       SELECT t.*, c.name AS center_name FROM invite_tokens t
       JOIN centers c ON t.center_id = c.id
       WHERE t.token = ? AND t.used_by IS NULL AND t.expires_at > NOW()
-    `, [req.params.token]);
+    `, [req.params.token.trim().toLowerCase()]);
 
     if (!t) return res.status(404).json({ error: 'Token not found or expired' });
     res.json({ valid: true, role: t.role, centerName: t.center_name, label: t.label });

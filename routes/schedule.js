@@ -59,13 +59,7 @@ router.get('/', authenticate, async (req, res, next) => {
       q += ' ORDER BY s.day_of_week, s.start_time';
     }
 
-    const schedules = await db.all(q, params);
-    const byDay = {};
-    schedules.forEach(s => {
-      if (!byDay[s.day_of_week]) byDay[s.day_of_week] = [];
-      byDay[s.day_of_week].push(s);
-    });
-    res.json({ schedules, byDay });
+    res.json(await db.all(q, params));
   } catch (err) { next(err); }
 });
 
