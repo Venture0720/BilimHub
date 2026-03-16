@@ -16,11 +16,15 @@
     "init-prod": "node init-production.js",
     "migrate": "npx knex migrate:latest",
     "migrate:rollback": "npx knex migrate:rollback",
-    "test": "node test.js"
+    "test": "node test.js",
+    "cap:sync": "npx cap sync",
+    "cap:android": "npx cap open android",
+    "cap:build": "npm run build && npx cap sync android",
+    "cap:run": "npx cap run android"
   },
   "dependencies": {
+    "@vercel/blob": "^2.3.1",
     "@capacitor/app": "^8.0.1",
-    "@capacitor/core": "^8.2.0",
     "@capacitor/haptics": "^8.0.1",
     "@capacitor/keyboard": "^8.0.1",
     "@capacitor/splash-screen": "^8.0.1",
@@ -43,6 +47,9 @@
     "react-dom": "^19.2.4"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.2.0",
+    "@capacitor/cli": "^8.2.0",
+    "@capacitor/core": "^8.2.0",
     "@vitejs/plugin-react": "^6.0.1",
     "nodemon": "^3.1.0",
     "vite": "^8.0.0",

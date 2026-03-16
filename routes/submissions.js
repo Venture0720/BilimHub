@@ -7,20 +7,12 @@ const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
 
-const UPLOADS_DIR = path.resolve(process.env.UPLOADS_DIR || './uploads');
 const MAX_UPLOAD_SIZE = parseInt(process.env.MAX_UPLOAD_SIZE || 10 * 1024 * 1024, 10);
 const ALLOWED_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.txt', '.jpg', '.jpeg', '.png', '.zip', '.pptx', '.xlsx']);
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOADS_DIR),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, crypto.randomUUID() + ext);
-  },
-});
-
+// Always buffer in memory — we decide where to persist it in saveFile()
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: MAX_UPLOAD_SIZE },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
@@ -28,6 +20,46 @@ const upload = multer({
     cb(null, true);
   },
 }).single('file');
+
+/**
+ * Persist an uploaded file buffer.
+ * - With BLOB_READ_WRITE_TOKEN (Vercel prod): upload to Vercel Blob, return full https:// URL.
+ * - Without token (local dev): write to ./uploads/, return bare filename.
+ */
+async function saveFile(file) {
+  const ext = path.extname(file.originalname).toLowerCase();
+  const uniqueName = crypto.randomUUID() + ext;
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    const { put } = require('@vercel/blob');
+    const blob = await put(`submissions/${uniqueName}`, file.buffer, {
+      access: 'public',
+      contentType: file.mimetype,
+      token: process.env.BLOB_READ_WRITE_TOKEN,
+    });
+    return blob.url;
+  }
+  // Local dev – plain disk
+  const uploadsDir = path.resolve('./uploads');
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  fs.writeFileSync(path.join(uploadsDir, uniqueName), file.buffer);
+  return uniqueName;
+}
+
+/**
+ * Delete a stored file. Best-effort — never throws.
+ * Accepts either a full https:// blob URL or a bare local filename.
+ */
+async function deleteFile(filePath) {
+  if (!filePath) return;
+  try {
+    if (filePath.startsWith('https://')) {
+      const { del } = require('@vercel/blob');
+      await del(filePath, { token: process.env.BLOB_READ_WRITE_TOKEN });
+    } else {
+      fs.unlinkSync(path.join(path.resolve('./uploads'), filePath));
+    }
+  } catch { /* best-effort */ }
+}
 
 // ── POST /api/submissions — submit an assignment ─────────────────────────────
 router.post('/', ...requireRole('student'), (req, res, next) => {
@@ -57,14 +89,20 @@ router.post('/', ...requireRole('student'), (req, res, next) => {
         return res.status(400).json({ error: 'File or text answer required' });
       }
 
+      // Upload file to Vercel Blob (prod) or disk (dev) before touching the DB
+      let savedFilePath = null;
+      if (req.file) {
+        savedFilePath = await saveFile(req.file);
+      }
+
       if (existing) {
         // Update existing submission
         if (existing.status === 'submitted' || existing.status === 'returned') {
           const sets = [`submitted_at = NOW()`, `status = 'submitted'`];
           const params = [];
-          if (req.file) {
+          if (savedFilePath) {
             sets.push('file_path = ?', 'file_name = ?');
-            params.push(req.file.filename, req.file.originalname);
+            params.push(savedFilePath, req.file.originalname);
           }
           if (textAnswer !== undefined) { sets.push('text_answer = ?'); params.push(textAnswer); }
           if (comment !== undefined) { sets.push('comment = ?'); params.push(comment); }
@@ -79,7 +117,7 @@ router.post('/', ...requireRole('student'), (req, res, next) => {
       const result = await db.run(`
         INSERT INTO submissions (assignment_id, student_id, file_path, file_name, text_answer, comment)
         VALUES (?,?,?,?,?,?) RETURNING id
-      `, [assignmentId, req.user.id, req.file?.filename || null, req.file?.originalname || null, textAnswer || null, comment || null]);
+      `, [assignmentId, req.user.id, savedFilePath, req.file?.originalname || null, textAnswer || null, comment || null]);
 
       const submission = await db.get(`SELECT * FROM submissions WHERE id = ?`, [result.lastInsertRowid]);
       res.status(201).json(submission);
@@ -143,6 +181,49 @@ router.get('/', authenticate, async (req, res, next) => {
     q += ` ORDER BY s.submitted_at DESC LIMIT 200`;
     const subs = await db.all(q, params);
     res.json(subs);
+  } catch (err) { next(err); }
+});
+
+// ── GET /api/submissions/assignment/:id — teacher views all submissions ─────
+router.get('/assignment/:id', ...requireRole('teacher', 'center_admin', 'super_admin'), async (req, res, next) => {
+  try {
+    const assignmentId = parseInt(req.params.id, 10);
+    if (!assignmentId) return res.status(400).json({ error: 'Invalid assignment id' });
+
+    const assignment = await db.get(`
+      SELECT a.*, c.teacher_id
+      FROM assignments a
+      JOIN classes c ON a.class_id = c.id
+      WHERE a.id = ?
+    `, [assignmentId]);
+    if (!assignment) return res.status(404).json({ error: 'Assignment not found' });
+
+    if (req.user.role !== 'super_admin' && assignment.center_id !== req.user.center_id) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    if (req.user.role === 'teacher' && assignment.teacher_id !== req.user.id) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const submissions = await db.all(`
+      SELECT s.*, u.name AS student_name
+      FROM submissions s
+      JOIN users u ON s.student_id = u.id
+      WHERE s.assignment_id = ?
+      ORDER BY s.submitted_at DESC
+    `, [assignmentId]);
+
+    const submittedIds = new Set(submissions.map((submission) => submission.student_id));
+    const enrolled = await db.all(`
+      SELECT u.id, u.name
+      FROM users u
+      JOIN enrollments e ON e.student_id = u.id
+      WHERE e.class_id = ?
+      ORDER BY u.name ASC
+    `, [assignment.class_id]);
+    const notSubmitted = enrolled.filter((student) => !submittedIds.has(student.id));
+
+    res.json({ submissions, notSubmitted });
   } catch (err) { next(err); }
 });
 

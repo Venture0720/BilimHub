@@ -108,10 +108,10 @@ v1.use('/users',         require('./routes/users'));
 v1.use('/classes',       require('./routes/classes'));
 v1.use('/assignments',   require('./routes/assignments'));
 v1.use('/submissions',   require('./routes/submissions'));
-v1.use('/grades',        require('./routes/grades'));
-v1.use('/attendance',    require('./routes/attendance'));
+v1.use('/grades',        require('./routes/grades'));  v1.use('/hw',            require('./routes/hw'));v1.use('/attendance',    require('./routes/attendance'));
 v1.use('/notifications', require('./routes/notifications'));
 v1.use('/schedule',      require('./routes/schedule'));
+v1.use('/sched',         require('./routes/sched'));
 v1.use('/audit',         require('./routes/audit'));
 v1.use('/cleanup',       require('./routes/data-cleanup'));
 
@@ -146,11 +146,13 @@ app.get(/^(?!\/api).*$/, (req, res) => {
 // ── Global error handler
 app.use((err, req, res, next) => {
   const status = err.status || 500;
-  const message = process.env.NODE_ENV === 'production' && status === 500
-    ? 'Internal server error'
-    : err.message || 'Something went wrong';
   if (status === 500) logger.error({ err }, 'Unhandled server error');
-  res.status(status).json({ error: message });
+  res.status(status).json({
+    error: err.message || 'Something went wrong',
+    detail: err.detail || undefined,
+    code: err.code || undefined,
+    hint: err.hint || undefined,
+  });
 });
 
 if (require.main === module) {

@@ -12,6 +12,10 @@ export function MobileAppWrapper({ children }) {
 
   useEffect(() => {
     const root = document.documentElement;
+    const clearSelection = () => {
+      const selection = window.getSelection?.();
+      if (selection && selection.rangeCount > 0) selection.removeAllRanges();
+    };
     const isEditableTarget = (target) => {
       if (!(target instanceof HTMLElement)) return false;
       if (target.isContentEditable) return true;
@@ -39,8 +43,23 @@ export function MobileAppWrapper({ children }) {
       event.preventDefault();
     };
 
+    const clearMobileSelection = () => {
+      if (!isMobile) return;
+      const active = document.activeElement;
+      if (isEditableTarget(active)) return;
+      clearSelection();
+    };
+
+    const clearSelectionOnTouchEnd = (event) => {
+      if (!isMobile || isEditableTarget(event.target)) return;
+      window.setTimeout(clearSelection, 0);
+    };
+
     document.addEventListener('selectstart', preventMobileTextActions);
     document.addEventListener('contextmenu', preventMobileTextActions);
+    document.addEventListener('dragstart', preventMobileTextActions);
+    document.addEventListener('selectionchange', clearMobileSelection);
+    document.addEventListener('touchend', clearSelectionOnTouchEnd, { passive: true });
 
     // Detect keyboard on native
     if (isNative) {
@@ -58,6 +77,9 @@ export function MobileAppWrapper({ children }) {
         root.classList.remove('native', 'touch-ui', 'mobile-web');
         document.removeEventListener('selectstart', preventMobileTextActions);
         document.removeEventListener('contextmenu', preventMobileTextActions);
+        document.removeEventListener('dragstart', preventMobileTextActions);
+        document.removeEventListener('selectionchange', clearMobileSelection);
+        document.removeEventListener('touchend', clearSelectionOnTouchEnd);
         window.removeEventListener('resize', checkKeyboard);
         window.removeEventListener('offline', goOffline);
         window.removeEventListener('online', goOnline);
@@ -69,6 +91,9 @@ export function MobileAppWrapper({ children }) {
       root.classList.remove('native', 'touch-ui', 'mobile-web');
       document.removeEventListener('selectstart', preventMobileTextActions);
       document.removeEventListener('contextmenu', preventMobileTextActions);
+      document.removeEventListener('dragstart', preventMobileTextActions);
+      document.removeEventListener('selectionchange', clearMobileSelection);
+      document.removeEventListener('touchend', clearSelectionOnTouchEnd);
       window.removeEventListener('offline', goOffline);
       window.removeEventListener('online', goOnline);
       window.removeEventListener('resize', setVH);

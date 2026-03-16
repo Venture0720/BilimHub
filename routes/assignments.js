@@ -167,12 +167,21 @@ router.delete('/:id', ...requireRole('teacher','center_admin','super_admin'), as
     if (req.user.role === 'teacher' && a.teacher_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
     if (req.user.role !== 'super_admin' && a.center_id !== req.user.center_id) return res.status(403).json({ error: 'Forbidden' });
 
-    // Clean up associated files
+    // Clean up associated files (Vercel Blob URLs or local disk files)
     const files = await db.all(`SELECT file_path FROM submissions WHERE assignment_id = ? AND file_path IS NOT NULL`, [a.id]);
-    const fs = require('fs');
-    const path = require('path');
-    const UPLOADS_DIR = path.resolve(process.env.UPLOADS_DIR || './uploads');
-    files.forEach(f => fs.unlink(path.join(UPLOADS_DIR, f.file_path), () => {}));
+    for (const f of files) {
+      if (!f.file_path) continue;
+      try {
+        if (f.file_path.startsWith('https://')) {
+          const { del } = require('@vercel/blob');
+          await del(f.file_path, { token: process.env.BLOB_READ_WRITE_TOKEN });
+        } else {
+          const fs2 = require('fs');
+          const path2 = require('path');
+          fs2.unlinkSync(path2.join(path2.resolve('./uploads'), f.file_path));
+        }
+      } catch { /* best-effort */ }
+    }
 
     await db.run(`DELETE FROM assignments WHERE id = ?`, [a.id]);
     res.json({ ok: true });

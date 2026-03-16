@@ -383,7 +383,53 @@ select.fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.o
 /* ── EMPTY STATE ───────────────────────────────────────────────────── */
 .empty{text-align:center;padding:32px var(--sp-lg);color:var(--muted)}
 .empty-ico{font-size:32px;margin-bottom:8px}
+/* ── FORM LABEL VARIANT ───────────────────────────────────────────── */
+.fi-label{font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;display:block;text-transform:uppercase;letter-spacing:.05em}
 
+/* ── LESSON CALENDAR GRID ─────────────────────────────────────────── */
+/* Desktop time-grid (used by ScheduleModule) */
+.lsn-grid-wrap{overflow:auto;border-radius:var(--r);border:1px solid var(--border);background:var(--surface)}
+.lsn-grid{display:grid;min-width:540px}
+.lsn-time-col{width:44px;padding:0 4px;text-align:right;font-size:9px;font-family:'JetBrains Mono',monospace;color:var(--muted);line-height:1}
+.lsn-day-col{flex:1;position:relative;border-left:1px solid var(--border)}
+.lsn-hour-line{position:absolute;left:0;right:0;border-top:1px dashed var(--border);pointer-events:none}
+.lsn-now-line{position:absolute;left:0;right:0;border-top:2px solid var(--red);pointer-events:none;z-index:3}
+.lsn-now-line::before{content:'';position:absolute;left:-5px;top:-5px;width:10px;height:10px;border-radius:50%;background:var(--red)}
+.lsn-block{
+  position:absolute;left:3px;right:3px;
+  border-radius:7px;padding:4px 7px;
+  cursor:pointer;overflow:hidden;
+  transition:transform .15s cubic-bezier(.34,1.56,.64,1),box-shadow .15s;
+  border-left:3px solid transparent;
+  z-index:2;
+}
+.lsn-block:hover{transform:scale(1.03) translateY(-1px);box-shadow:var(--sh2)}
+.lsn-block:active{transform:scale(0.98)}
+.lsn-block-title{font-size:10px;font-weight:700;line-height:1.2;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.lsn-block-sub{font-size:9px;opacity:.75;line-height:1.2;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+/* Mobile day tabs for schedule */
+.sched-day-tabs{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px;margin-bottom:14px}
+.sched-day-tabs::-webkit-scrollbar{display:none}
+.sched-day-tab{flex-shrink:0;min-width:44px;padding:6px 10px;border-radius:10px;font-size:11px;font-weight:700;cursor:pointer;border:none;background:var(--surface2);color:var(--muted);transition:all .15s;text-align:center;-webkit-tap-highlight-color:transparent}
+.sched-day-tab.active{background:var(--primary);color:#fff;box-shadow:var(--sh-glow)}
+.sched-day-tab.today{outline:2px solid var(--primary)}
+.sched-day-tab.today.active{outline:none}
+/* Lesson list card */
+.lsn-card{display:flex;gap:12px;align-items:center;padding:10px 14px;border-radius:var(--r);background:var(--surface);border:1px solid var(--border);box-shadow:var(--sh);cursor:pointer;transition:all .15s;-webkit-tap-highlight-color:transparent;animation:lsn-in .2s ease}
+.lsn-card:active{transform:scale(0.99)}
+.lsn-card-dot{width:4px;align-self:stretch;border-radius:4px;flex-shrink:0}
+.lsn-card-time{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;color:var(--accent);white-space:nowrap;min-width:82px}
+.lsn-card-title{font-size:13px;font-weight:700;line-height:1.2}
+.lsn-card-sub{font-size:11px;color:var(--muted);margin-top:2px;line-height:1.3}
+@keyframes lsn-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+/* Teacher avatar row */
+.lsn-avatars{display:flex;gap:4px;margin-top:4px}
+.lsn-avatar{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff;flex-shrink:0}
+/* Color swatch picker */
+.color-picker{display:flex;gap:6px;flex-wrap:wrap}
+.color-swatch{width:28px;height:28px;border-radius:50%;cursor:pointer;border:3px solid transparent;transition:transform .15s,border-color .15s;-webkit-tap-highlight-color:transparent}
+.color-swatch:hover{transform:scale(1.15)}
+.color-swatch.active{border-color:var(--text);transform:scale(1.1)}
 /* ── SCORE INPUT ───────────────────────────────────────────────────── */
 .score-inp{width:58px;padding:6px 8px;border:1.5px solid var(--border);border-radius:6px;font-size:14px;font-weight:700;text-align:center;outline:none;background:#fff;font-family:'JetBrains Mono',monospace;min-height:36px}
 .score-inp:focus{border-color:var(--accent)}

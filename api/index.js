@@ -1,3 +1,11 @@
+// Run pending DB migrations on cold start (idempotent)
+try {
+  const knex = require('knex')(require('../knexfile')[process.env.NODE_ENV || 'production']);
+  knex.migrate.latest({ directory: require('path').join(__dirname, '../migrations') })
+    .then(() => knex.destroy())
+    .catch(e => console.error('Migration error:', e.message));
+} catch (e) { console.error('Migration init error:', e.message); }
+
 let app;
 try {
   app = require('../server');

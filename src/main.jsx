@@ -1911,9 +1911,14 @@ function GradeModal({ submission, assignment, onGrade, onClose }) {
         )}
 
         {/* Файлы */}
-        {submission.file_name && (
+        {submission.file_name && submission.file_path && (
           <div style={{marginBottom:16}}>
-            <a href={`/uploads/${submission.file_path}`} target="_blank" className="btn btn-s btn-sm">
+            <a
+              href={submission.file_path.startsWith('http') ? submission.file_path : `/uploads/${submission.file_path}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn-s btn-sm"
+            >
               📎 {submission.file_name}
             </a>
           </div>
@@ -2230,7 +2235,7 @@ function AssignmentsView({ user }) {
                 <tr key={s.id}>
                   <td style={{fontWeight:600}}>{s.student_name}</td>
                   <td style={{maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:11}}>{s.text_answer||'—'}</td>
-                  <td>{s.file_name ? <a href={`/uploads/${s.file_path}`} target="_blank" style={{color:'var(--accent)',fontSize:11}}>📎 {s.file_name}</a> : '—'}</td>
+                  <td>{s.file_name && s.file_path ? <a href={s.file_path.startsWith('http') ? s.file_path : `/uploads/${s.file_path}`} target="_blank" rel="noopener noreferrer" style={{color:'var(--accent)',fontSize:11}}>📎 {s.file_name}</a> : '—'}</td>
                   <td style={{fontSize:11,color:'var(--muted)'}}>{fmtDate(s.submitted_at)}</td>
                   <td>
                     {s.score!==null ? (
@@ -2256,7 +2261,7 @@ function AssignmentsView({ user }) {
                   </div>
                   {s.text_answer && <div style={{fontSize:12,color:'var(--muted)',marginBottom:6,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.text_answer}</div>}
                   <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',fontSize:12}}>
-                    {s.file_name && <a href={`/uploads/${s.file_path}`} target="_blank" style={{color:'var(--accent)'}}>📎 {s.file_name}</a>}
+                    {s.file_name && s.file_path && <a href={s.file_path.startsWith('http') ? s.file_path : `/uploads/${s.file_path}`} target="_blank" rel="noopener noreferrer" style={{color:'var(--accent)'}}>📎 {s.file_name}</a>}
                     <span style={{color:'var(--muted)'}}>{fmtDate(s.submitted_at)}</span>
                     {s.score!==null && <span style={{fontWeight:700,color:getGradeColor(s.score, viewAssign.grading_scale)}}>{getGradeIcon(s.score, viewAssign.grading_scale)} {s.score}/{viewAssign.max_score}</span>}
                   </div>
@@ -2429,18 +2434,797 @@ function AssignmentsView({ user }) {
   );
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// ·· HOMEWORK MODULE v2 — clean rewrite
+//    • Teacher: create / edit / delete assignments, view & grade submissions
+//    • Student: view list, submit with optional file upload, see grades
+//    • File upload: browser → Vercel Blob CDN directly (no 4.5 MB serverless limit)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Status badge helper ───────────────────────────────────────────────────────
+function HWStatusBadge({ status, score, maxScore }) {
+  const map = {
+    submitted:  { label: 'Сдано',       cls: 'ba' },
+    graded:     { label: score != null ? `${score}/${maxScore}` : 'Проверено', cls: 'bg' },
+    returned:   { label: 'На доработку', cls: 'br' },
+    overdue:    { label: 'Просрочено',   cls: 'bk' },
+    pending:    { label: 'Не сдано',     cls: 'bk' },
+  };
+  const s = map[status] || map.pending;
+  return <span className={`bdg ${s.cls}`}>{s.label}</span>;
+}
+
+// ── Deadline label ────────────────────────────────────────────────────────────
+function Deadline({ date }) {
+  const d = new Date(date);
+  const now = new Date();
+  const diff = Math.ceil((d - now) / 86400000);
+  const label = fmtDate(date);
+  const color = diff < 0 ? 'var(--red)' : diff <= 1 ? 'var(--amber)' : 'var(--muted)';
+  const prefix = diff < 0 ? '⚠️ ' : diff === 0 ? '🔔 Сегодня · ' : diff === 1 ? '⏰ Завтра · ' : '';
+  return <span style={{ color, fontSize: 11 }}>{prefix}{label}</span>;
+}
+
+// ── Blob upload: browser → Vercel CDN ────────────────────────────────────────
+// Returns { url, name } or throws
+async function uploadFileToBlobCDN(file) {
+  if (!file) throw new Error('Файл не выбран');
+
+  // 1. Get client token from our server (small JSON, no payload limit issues)
+  const { clientToken, blobPathname, localMode } = await API.post('/api/hw/upload-token', {
+    filename: file.name,
+    contentType: file.type || 'application/octet-stream',
+  });
+
+  // 2a. Local dev fallback (no BLOB_READ_WRITE_TOKEN set)
+  if (localMode) {
+    return { url: null, name: file.name };
+  }
+
+  // 2b. Production — use the official @vercel/blob/client put() which:
+  //   • uploads to https://vercel.com/api/blob (NOT the CDN read domain)
+  //   • sends the required x-api-version header
+  //   • fully bypasses the Vercel serverless 4.5 MB body limit
+  const { put } = await import('@vercel/blob/client');
+  const blob = await put(blobPathname, file, {
+    access: 'public',
+    token: clientToken,          // must start with 'vercel_blob_client_'
+    contentType: file.type || 'application/octet-stream',
+  });
+  return { url: blob.url, name: file.name };
+}
+
+// ── Modal shell ───────────────────────────────────────────────────────────────
+function HWModal({ title, subtitle, onClose, children, wide }) {
+  // Close on Escape
+  useEffect(() => {
+    const fn = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', fn);
+    return () => window.removeEventListener('keydown', fn);
+  }, [onClose]);
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div
+        className="modal"
+        style={{ maxWidth: wide ? 'min(780px, 96vw)' : 'min(520px, 96vw)', maxHeight: '90dvh', display: 'flex', flexDirection: 'column' }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '18px 18px 0' }}>
+          <div style={{ flex: 1 }}>
+            <div className="modal-t" style={{ margin: 0 }}>{title}</div>
+            {subtitle && <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>{subtitle}</div>}
+          </div>
+          <button className="btn btn-d btn-sm" onClick={onClose} style={{ flexShrink: 0 }}>✕</button>
+        </div>
+        <div style={{ overflowY: 'auto', flex: 1, padding: '16px 18px 18px' }}>
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── File picker with progress ─────────────────────────────────────────────────
+function FilePicker({ onFile, file, uploading, progress, onClear }) {
+  const inputRef = useRef(null);
+  const MAX = 50 * 1024 * 1024;
+  const TYPES = '.pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.gif,.webp,.zip,.ppt,.pptx,.xls,.xlsx';
+
+  function pick(e) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    if (f.size > MAX) { alert('Файл слишком большой (максимум 50 МБ)'); return; }
+    onFile(f);
+  }
+  return (
+    <div>
+      <label style={{ fontWeight: 600, fontSize: 12, marginBottom: 6, display: 'block' }}>
+        Прикрепить файл <span style={{ fontWeight: 400, color: 'var(--muted)' }}>(до 50 МБ)</span>
+      </label>
+      {file ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'var(--surface2)', borderRadius: 8 }}>
+          <span style={{ fontSize: 18 }}>📎</span>
+          <span style={{ flex: 1, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</span>
+          {uploading ? (
+            <span style={{ fontSize: 11, color: 'var(--accent)', minWidth: 60, textAlign: 'right' }}>
+              {progress < 100 ? `${progress}%` : '✓ Загружено'}
+            </span>
+          ) : (
+            <button type="button" className="btn btn-d btn-sm" onClick={onClear}>✕</button>
+          )}
+        </div>
+      ) : (
+        <div
+          style={{ border: '2px dashed var(--border)', borderRadius: 8, padding: '16px 12px', textAlign: 'center', cursor: 'pointer' }}
+          onClick={() => inputRef.current?.click()}
+        >
+          <div style={{ fontSize: 24, marginBottom: 4 }}>📁</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>Нажмите для выбора файла</div>
+          <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>PDF, Word, Excel, PowerPoint, изображения, ZIP</div>
+        </div>
+      )}
+      <input ref={inputRef} type="file" accept={TYPES} style={{ display: 'none' }} onChange={pick} />
+    </div>
+  );
+}
+
+// ── Create / Edit assignment modal (teacher) ──────────────────────────────────
+function HWCreateModal({ classes, editData, onSave, onClose }) {
+  const isEdit = !!editData;
+  const [form, setForm] = useState({
+    classId:      editData?.class_id  || classes?.[0]?.id || '',
+    title:        editData?.title     || '',
+    description:  editData?.description || '',
+    type:         editData?.type      || 'homework',
+    gradingScale: editData?.grading_scale || '10-point',
+    maxScore:     editData?.max_score || 10,
+    dueDate:      editData?.due_date ? editData.due_date.slice(0, 10) : '',
+    isPublished:  editData ? editData.is_published : 1,
+  });
+  const [file, setFile]         = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress]   = useState(0);
+  const [err, setErr]   = useState('');
+  const [saving, setSaving] = useState(false);
+  const toast = useToast();
+
+  function set(k) { return v => setForm(f => ({ ...f, [k]: v })); }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr('');
+    if (!form.title.trim())   { setErr('Введите название'); return; }
+    if (!form.dueDate)        { setErr('Укажите дедлайн'); return; }
+    if (!form.classId)        { setErr('Выберите класс'); return; }
+
+    setSaving(true);
+    let filePath = editData?.file_path || null;
+    let fileName = editData?.file_name || null;
+
+    try {
+      // Upload file if one was chosen
+      if (file) {
+        setUploading(true);
+        setProgress(10);
+        const result = await uploadFileToBlobCDN(file);
+        setProgress(100);
+        filePath = result.url;
+        fileName = result.name;
+        setUploading(false);
+      }
+
+      const body = {
+        classId:      parseInt(form.classId, 10),
+        title:        form.title.trim(),
+        description:  form.description.trim() || undefined,
+        type:         form.type,
+        gradingScale: form.gradingScale,
+        maxScore:     parseInt(form.maxScore, 10),
+        dueDate:      form.dueDate,
+        isPublished:  form.isPublished ? 1 : 0,
+        filePath,
+        fileName,
+      };
+
+      if (isEdit) {
+        await API.patch(`/api/hw/assignments/${editData.id}`, body);
+        toast('Задание обновлено', 'success');
+      } else {
+        await API.post('/api/hw/assignments', body);
+        toast('Задание создано', 'success');
+      }
+      onSave();
+    } catch (ex) {
+      setErr(ex.message);
+    } finally {
+      setSaving(false);
+      setUploading(false);
+    }
+  }
+
+  const TYPES = [
+    { v: 'homework', l: '📝 Домашнее задание' },
+    { v: 'test',     l: '📋 Контрольная работа' },
+    { v: 'essay',    l: '✍️ Сочинение' },
+    { v: 'lab',      l: '🔬 Лабораторная' },
+    { v: 'project',  l: '🚀 Проект' },
+  ];
+
+  return (
+    <HWModal
+      title={isEdit ? 'Редактировать задание' : 'Новое задание'}
+      subtitle={isEdit ? editData.title : 'Заполните детали задания'}
+      onClose={onClose}
+    >
+      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div>
+          <label className="fi-label">Класс</label>
+          <select className="fi" value={form.classId} onChange={e => set('classId')(e.target.value)} required>
+            <option value="">— выберите —</option>
+            {(classes || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="fi-label">Название *</label>
+          <input className="fi" value={form.title} onChange={e => set('title')(e.target.value)} placeholder="Например: Глава 3, упр. 4–8" required />
+        </div>
+        <div>
+          <label className="fi-label">Описание / инструкция</label>
+          <textarea className="fi" rows={3} value={form.description} onChange={e => set('description')(e.target.value)} placeholder="Опишите задание подробнее..." style={{ resize: 'vertical' }} />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div>
+            <label className="fi-label">Тип</label>
+            <select className="fi" value={form.type} onChange={e => set('type')(e.target.value)}>
+              {TYPES.map(t => <option key={t.v} value={t.v}>{t.l}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="fi-label">Система оценки</label>
+            <select className="fi" value={form.gradingScale} onChange={e => { set('gradingScale')(e.target.value); set('maxScore')(e.target.value === '100-point' ? 100 : 10); }}>
+              <option value="10-point">10-балльная</option>
+              <option value="100-point">100-балльная</option>
+            </select>
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div>
+            <label className="fi-label">Макс. балл</label>
+            <input className="fi" type="number" min={1} max={form.gradingScale === '100-point' ? 100 : 10} value={form.maxScore} onChange={e => set('maxScore')(e.target.value)} />
+          </div>
+          <div>
+            <label className="fi-label">Дедлайн *</label>
+            <input className="fi" type="date" value={form.dueDate} min={new Date().toISOString().slice(0, 10)} onChange={e => set('dueDate')(e.target.value)} required />
+          </div>
+        </div>
+        <FilePicker
+          file={file}
+          uploading={uploading}
+          progress={progress}
+          onFile={setFile}
+          onClear={() => setFile(null)}
+        />
+        {editData?.file_path && !file && (
+          <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+            📎 Прикреплён: <a href={editData.file_path} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>{editData.file_name || 'Файл учителя'}</a>
+          </div>
+        )}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
+          <input type="checkbox" checked={!!form.isPublished} onChange={e => set('isPublished')(e.target.checked ? 1 : 0)} />
+          Опубликовать сразу (ученики увидят задание)
+        </label>
+        {err && <div style={{ color: 'var(--red)', fontSize: 12, padding: '8px 12px', background: 'var(--red-s)', borderRadius: 6 }}>⚠️ {err}</div>}
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
+          <button type="button" className="btn btn-s" onClick={onClose}>Отмена</button>
+          <button type="submit" className="btn btn-p" disabled={saving || uploading}>
+            {saving ? 'Сохранение...' : uploading ? 'Загрузка файла...' : isEdit ? 'Сохранить' : 'Создать'}
+          </button>
+        </div>
+      </form>
+    </HWModal>
+  );
+}
+
+// ── Submissions list modal (teacher) ──────────────────────────────────────────
+function HWSubmissionsModal({ assignment, onClose, onReload }) {
+  const [data, setData]   = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [grading, setGrading] = useState(null); // submission being graded
+  const [scoreInput, setScoreInput] = useState('');
+  const [feedbackInput, setFeedbackInput] = useState('');
+  const [saving, setSaving] = useState(false);
+  const toast = useToast();
+
+  async function load() {
+    setLoading(true);
+    try { setData(await API.get(`/api/hw/assignments/${assignment.id}/submissions`)); } catch (ex) { toast(ex.message, 'error'); }
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, [assignment.id]);
+
+  async function grade(sub) {
+    setSaving(true);
+    const score = parseFloat(scoreInput);
+    if (isNaN(score) || score < 0 || score > assignment.max_score) {
+      toast(`Оценка от 0 до ${assignment.max_score}`, 'error');
+      setSaving(false); return;
+    }
+    try {
+      await API.post(`/api/hw/submissions/${sub.id}/grade`, { score, feedback: feedbackInput.trim() || undefined });
+      toast('Оценка сохранена', 'success');
+      setGrading(null);
+      await load();
+      onReload();
+    } catch (ex) { toast(ex.message, 'error'); }
+    setSaving(false);
+  }
+
+  async function returnWork(sub) {
+    const fb = window.prompt('Комментарий для ученика (необязательно):') ?? null;
+    if (fb === null && !confirm('Вернуть работу без комментария?')) return;
+    try {
+      await API.post(`/api/hw/submissions/${sub.id}/return`, { feedback: fb || undefined });
+      toast('Работа возвращена на доработку', 'info');
+      await load();
+    } catch (ex) { toast(ex.message, 'error'); }
+  }
+
+  const statusColor = { submitted: 'var(--amber)', graded: 'var(--green)', returned: 'var(--red)' };
+
+  return (
+    <HWModal
+      title={`Работы: ${assignment.title}`}
+      subtitle={`${data?.submissions?.length || 0} сдано · ${data?.missing?.length || 0} не сдано · макс. ${assignment.max_score}`}
+      onClose={onClose}
+      wide
+    >
+      {loading ? <div style={{textAlign:'center',padding:32}}><Spinner/></div> : !data ? null : (
+        <>
+          {data.submissions.length === 0 && <div className="empty" style={{padding:'24px 0'}}><div className="empty-ico">📭</div>Никто ещё не сдал</div>}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {data.submissions.map(sub => (
+              <div key={sub.id} className="card" style={{ padding: '12px 14px', borderLeft: `4px solid ${statusColor[sub.status] || 'var(--border)'}` }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>{sub.student_name}</div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{fmtDate(sub.submitted_at)}</div>
+                    {sub.text_answer && (
+                      <div style={{ marginTop: 6, fontSize: 12, background: 'var(--surface2)', borderRadius: 6, padding: '6px 10px', maxHeight: 80, overflow: 'auto' }}>
+                        {sub.text_answer}
+                      </div>
+                    )}
+                    {sub.file_path && (
+                      <a href={sub.file_path} target="_blank" rel="noopener noreferrer"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 6, fontSize: 12, color: 'var(--accent)' }}>
+                        📎 {sub.file_name || 'Скачать файл'}
+                      </a>
+                    )}
+                    {sub.feedback && (
+                      <div style={{ marginTop: 6, fontSize: 11, color: 'var(--muted)' }}>💬 {sub.feedback}</div>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
+                    <HWStatusBadge status={sub.status} score={sub.score} maxScore={assignment.max_score} />
+                    {grading?.id === sub.id ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
+                        <input
+                          autoFocus
+                          type="number" min={0} max={assignment.max_score} step={0.5}
+                          placeholder={`0–${assignment.max_score}`}
+                          style={{ width: 70, textAlign: 'center', padding: '4px 8px', border: '2px solid var(--accent)', borderRadius: 6, fontSize: 14 }}
+                          value={scoreInput}
+                          onChange={e => setScoreInput(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') grade(sub); if (e.key === 'Escape') setGrading(null); }}
+                        />
+                        <input
+                          type="text" placeholder="Комментарий..."
+                          style={{ width: 160, padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12 }}
+                          value={feedbackInput}
+                          onChange={e => setFeedbackInput(e.target.value)}
+                        />
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <button className="btn btn-s btn-sm" onClick={() => setGrading(null)}>Отмена</button>
+                          <button className="btn btn-p btn-sm" disabled={saving} onClick={() => grade(sub)}>
+                            {saving ? '...' : 'Сохранить'}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <button
+                          className="btn btn-p btn-sm"
+                          onClick={() => { setGrading(sub); setScoreInput(sub.score != null ? String(sub.score) : ''); setFeedbackInput(sub.feedback || ''); }}
+                        >
+                          {sub.status === 'graded' ? '✏️ Изменить' : '✓ Оценить'}
+                        </button>
+                        {sub.status !== 'graded' && (
+                          <button className="btn btn-d btn-sm" onClick={() => returnWork(sub)}>↩ Вернуть</button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          {data.missing.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>НЕ СДАЛИ ({data.missing.length})</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {data.missing.map(s => (
+                  <span key={s.id} className="bdg bk">{s.name}</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </HWModal>
+  );
+}
+
+// ── Submit / view submission modal (student) ──────────────────────────────────
+function HWSubmitModal({ assignment, onClose, onReload }) {
+  const existing = assignment.submission_id ? {
+    id: assignment.submission_id,
+    status: assignment.submission_status,
+    score: assignment.submission_score,
+    feedback: assignment.submission_feedback,
+  } : null;
+
+  const isPast     = new Date(assignment.due_date) < new Date();
+  const isGraded   = existing?.status === 'graded';
+  const canEdit    = !isPast && (!existing || existing.status === 'returned' || existing.status === 'submitted');
+
+  const [text, setText]       = useState('');
+  const [file, setFile]       = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress]   = useState(0);
+  const [err, setErr]   = useState('');
+  const [saving, setSaving] = useState(false);
+  const toast = useToast();
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!text.trim() && !file) { setErr('Добавьте текстовый ответ или файл'); return; }
+    setErr('');
+    setSaving(true);
+
+    let filePath = null, fileName = null;
+    try {
+      if (file) {
+        setUploading(true);
+        setProgress(20);
+        const result = await uploadFileToBlobCDN(file);
+        setProgress(100);
+        filePath = result.url;
+        fileName = result.name;
+        setUploading(false);
+      }
+      await API.post(`/api/hw/assignments/${assignment.id}/submit`, {
+        textAnswer: text.trim() || undefined,
+        filePath,
+        fileName,
+      });
+      toast('Работа отправлена!', 'success');
+      onReload();
+      onClose();
+    } catch (ex) {
+      setErr(ex.message);
+    } finally {
+      setSaving(false);
+      setUploading(false);
+    }
+  }
+
+  return (
+    <HWModal
+      title={assignment.title}
+      subtitle={`${assignment.class_name} · до ${fmtDate(assignment.due_date)} · макс. ${assignment.max_score}`}
+      onClose={onClose}
+    >
+      {assignment.description && (
+        <div style={{ marginBottom: 14, padding: '10px 12px', background: 'var(--surface2)', borderRadius: 8, fontSize: 13, lineHeight: 1.6 }}>
+          {assignment.description}
+        </div>
+      )}
+      {assignment.file_path && (
+        <a href={assignment.file_path} target="_blank" rel="noopener noreferrer"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 14, fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}>
+          📎 Материал учителя: {assignment.file_name || 'Скачать'}
+        </a>
+      )}
+
+      {/* Grade result */}
+      {isGraded && (
+        <div style={{ marginBottom: 14, padding: 14, background: 'var(--green-s)', borderRadius: 8, border: '1px solid var(--green)' }}>
+          <div style={{ fontWeight: 800, fontSize: 18, color: 'var(--green)' }}>
+            {getGradeIcon(existing.score, assignment.grading_scale)} {existing.score}/{assignment.max_score}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{getGradeLabel(existing.score, assignment.grading_scale)}</div>
+          {existing.feedback && <div style={{ marginTop: 8, fontSize: 13 }}>💬 {existing.feedback}</div>}
+        </div>
+      )}
+
+      {/* Returned notice */}
+      {existing?.status === 'returned' && (
+        <div style={{ marginBottom: 14, padding: '10px 12px', background: 'var(--amber-s)', borderRadius: 8, border: '1px solid var(--amber)', fontSize: 13 }}>
+          ↩ Работа возвращена на доработку{existing.feedback ? `: ${existing.feedback}` : ''}
+        </div>
+      )}
+
+      {/* Submitted notice */}
+      {existing?.status === 'submitted' && !canEdit && (
+        <div style={{ marginBottom: 14, padding: '10px 12px', background: 'var(--blue-s)', borderRadius: 8, fontSize: 13 }}>
+          ✅ Работа отправлена, ожидает проверки
+        </div>
+      )}
+
+      {/* Past deadline */}
+      {isPast && !isGraded && (
+        <div style={{ marginBottom: 14, padding: '8px 12px', background: 'var(--red-s)', borderRadius: 8, fontSize: 13, color: 'var(--red)' }}>
+          ⏱ Дедлайн истёк
+        </div>
+      )}
+
+      {/* Submit form */}
+      {canEdit && (
+        <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>
+            <label className="fi-label">Ответ</label>
+            <textarea
+              className="fi" rows={4}
+              placeholder="Напишите ваш ответ здесь..."
+              value={text}
+              onChange={e => setText(e.target.value)}
+              style={{ resize: 'vertical' }}
+            />
+          </div>
+          <FilePicker
+            file={file}
+            uploading={uploading}
+            progress={progress}
+            onFile={setFile}
+            onClear={() => setFile(null)}
+          />
+          {err && <div style={{ color: 'var(--red)', fontSize: 12, padding: '8px 12px', background: 'var(--red-s)', borderRadius: 6 }}>⚠️ {err}</div>}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button type="button" className="btn btn-s" onClick={onClose}>Закрыть</button>
+            <button type="submit" className="btn btn-p" disabled={saving || uploading}>
+              {saving ? 'Отправка...' : uploading ? 'Загрузка...' : existing ? 'Обновить' : 'Отправить'}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {!canEdit && (
+        <div style={{ textAlign: 'right', marginTop: 8 }}>
+          <button className="btn btn-s" onClick={onClose}>Закрыть</button>
+        </div>
+      )}
+    </HWModal>
+  );
+}
+
+// ── Main HomeworkModule ───────────────────────────────────────────────────────
+function HomeworkModule({ user }) {
+  const isTeacher = ['teacher','center_admin','super_admin'].includes(user.role);
+  const isStudent = user.role === 'student';
+
+  const { data: classes } = useApi(() => API.get('/api/classes'));
+  const [classFilter, setClassFilter] = useState('');
+  const url = '/api/hw/assignments' + (classFilter ? `?classId=${classFilter}` : '');
+  const { data: assignments, loading, reload } = useApi(() => API.get(url), [url]);
+
+  const [showCreate, setShowCreate] = useState(false);
+  const [editTarget, setEditTarget] = useState(null);
+  const [viewSubs, setViewSubs]     = useState(null); // assignment for submissions modal
+  const [submitTarget, setSubmitTarget] = useState(null); // assignment for submit modal
+
+  const confirm = useConfirm();
+  const toast   = useToast();
+
+  async function deleteAssignment(a) {
+    const ok = await confirm(
+      `Задание «${a.title}» и все сданные работы будут удалены. Отменить нельзя.`,
+      'Удалить задание?', { danger: true, confirmText: 'Удалить', icon: '🗑️' });
+    if (!ok) return;
+    try {
+      await API.del(`/api/hw/assignments/${a.id}`);
+      toast('Задание удалено', 'success');
+      reload();
+    } catch (ex) { toast(ex.message, 'error'); }
+  }
+
+  // Compute student stats
+  const pending = isStudent ? (assignments || []).filter(a => !a.submission_id && new Date(a.due_date) >= new Date()) : [];
+  const overdue = isStudent ? (assignments || []).filter(a => !a.submission_id && new Date(a.due_date) < new Date()) : [];
+  const graded  = isStudent ? (assignments || []).filter(a => a.submission_status === 'graded') : [];
+
+  if (loading) return <Spinner />;
+
+  return (
+    <div className="fade">
+      {/* Header */}
+      <div className="ph" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div className="pt">Задания</div>
+          <div className="ps">{isTeacher ? 'Управление заданиями и проверка работ' : 'Мои домашние задания'}</div>
+        </div>
+        {isTeacher && (
+          <button className="btn btn-p btn-sm" onClick={() => setShowCreate(true)}>+ Создать</button>
+        )}
+      </div>
+
+      {/* Student stats */}
+      {isStudent && (
+        <div className="g3" style={{ marginBottom: 16 }}>
+          {[
+            { label: 'К сдаче',    value: pending.length, color: '#4f46e5', icon: '📋' },
+            { label: 'Просрочено', value: overdue.length, color: '#ef4444', icon: '⚠️' },
+            { label: 'Проверено',  value: graded.length,  color: '#10b981', icon: '✅' },
+          ].map(s => (
+            <div key={s.label} className="card" style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 22 }}>{s.icon}</span>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 20, color: s.color }}>{s.value}</div>
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>{s.label}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Class filter */}
+      {(classes?.length > 1 || isTeacher) && (
+        <div style={{ marginBottom: 14 }}>
+          <select className="fi" style={{ maxWidth: 260 }} value={classFilter} onChange={e => setClassFilter(e.target.value)}>
+            <option value="">Все классы</option>
+            {(classes || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+      )}
+
+      {/* Assignment list */}
+      {!assignments?.length
+        ? <div className="empty"><div className="empty-ico">📋</div>Нет заданий</div>
+        : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {assignments.map(a => {
+              const isPast   = new Date(a.due_date) < new Date();
+              const subStatus = a.submission_status || (isPast && !a.submission_id ? 'overdue' : !a.submission_id ? 'pending' : null);
+
+              return (
+                <div key={a.id} className="card" style={{ padding: '14px 16px', borderLeft: `4px solid ${a.class_color || '#6366f1'}` }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 700, fontSize: 14 }}>{a.title}</span>
+                        {isTeacher && !a.is_published && <span className="bdg bk" style={{fontSize:10}}>Черновик</span>}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 3 }}>
+                        {a.class_name} · <Deadline date={a.due_date} /> · макс. {a.max_score}
+                      </div>
+                      {a.description && (
+                        <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 5, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                          {a.description}
+                        </div>
+                      )}
+                      {isTeacher && (
+                        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6, display: 'flex', gap: 12 }}>
+                          <span>✅ Проверено: <strong>{a.graded_count || 0}</strong></span>
+                          <span>⏳ Ожидает: <strong style={{ color: +a.pending_count > 0 ? 'var(--amber)' : undefined }}>{a.pending_count || 0}</strong></span>
+                          <span>👥 Всего: <strong>{a.student_count || 0}</strong></span>
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
+                      {isStudent && <HWStatusBadge status={subStatus} score={a.submission_score} maxScore={a.max_score} />}
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        {isTeacher && (
+                          <>
+                            <button className="btn btn-p btn-sm" onClick={() => setViewSubs(a)}>
+                              📋 Работы {+a.pending_count > 0 ? `(${a.pending_count} новых)` : ''}
+                            </button>
+                            <button className="btn btn-s btn-sm" onClick={() => setEditTarget(a)}>✏️</button>
+                            <button className="btn btn-d btn-sm" onClick={() => deleteAssignment(a)}>🗑️</button>
+                          </>
+                        )}
+                        {isStudent && (
+                          <button
+                            className={`btn btn-sm ${a.submission_status === 'graded' ? 'btn-s' : 'btn-p'}`}
+                            onClick={() => setSubmitTarget(a)}
+                            disabled={isPast && !a.submission_id}
+                          >
+                            {a.submission_status === 'graded'   ? '📊 Оценка' :
+                             a.submission_status === 'returned'  ? '↩ Доработать' :
+                             a.submission_status === 'submitted' ? '👁 Просмотр' :
+                             isPast ? '⏱ Просрочено' : '📤 Сдать'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )
+      }
+
+      {/* Modals */}
+      {showCreate && (
+        <HWCreateModal
+          classes={classes}
+          onSave={() => { setShowCreate(false); reload(); }}
+          onClose={() => setShowCreate(false)}
+        />
+      )}
+      {editTarget && (
+        <HWCreateModal
+          classes={classes}
+          editData={editTarget}
+          onSave={() => { setEditTarget(null); reload(); }}
+          onClose={() => setEditTarget(null)}
+        />
+      )}
+      {viewSubs && (
+        <HWSubmissionsModal
+          assignment={viewSubs}
+          onClose={() => setViewSubs(null)}
+          onReload={reload}
+        />
+      )}
+      {submitTarget && (
+        <HWSubmitModal
+          assignment={submitTarget}
+          onClose={() => setSubmitTarget(null)}
+          onReload={reload}
+        />
+      )}
+    </div>
+  );
+}
+
 // ·· GRADEBOOK VIEW (teacher / admin)
 function GradebookView({ user }) {
   const { data: classes, loading: clsLoading } = useApi(() => API.get('/api/classes'));
   const [selClass, setSelClass] = useState('');
   const classId = selClass || (classes?.[0]?.id);
   const { data: gb, loading, reload } = useApi(() => classId ? API.get(`/api/grades/class/${classId}`) : Promise.resolve(null), [classId]);
+  const [editing, setEditing] = useState(null); // {r, c}
+  const [editVal, setEditVal] = useState('');
+  const [saving, setSaving] = useState(false);
   const toast = useToast();
 
-  async function updateScore(subId, assignId, studentId, score, maxScore) {
-    if (subId) {
-      try { await API.patch(`/api/submissions/${subId}/grade`, { score: parseFloat(score) }); reload(); toast('Оценка обновлена','success'); } catch(ex) { alert(ex.message); }
+  async function saveScore(r, c) {
+    if (saving) return;
+    const val = editVal.trim();
+    setEditing(null);
+    if (val === '') return;
+    const score = parseFloat(val);
+    const assignment = gb.assignments[c];
+    if (isNaN(score) || score < 0 || score > assignment.max_score) {
+      toast(`Оценка от 0 до ${assignment.max_score}`, 'error');
+      return;
     }
+    setSaving(true);
+    try {
+      await API.post('/api/grades/direct', {
+        studentId: gb.matrix[r].student.id,
+        assignmentId: assignment.id,
+        score,
+      });
+      reload();
+      toast('Оценка сохранена', 'success');
+    } catch(ex) { toast(ex.message, 'error'); }
+    setSaving(false);
+  }
+
+  function startEdit(r, c, currentScore) {
+    setEditing({r, c});
+    setEditVal(currentScore != null ? String(currentScore) : '');
   }
 
   if (clsLoading) return <Spinner/>;
@@ -2449,13 +3233,14 @@ function GradebookView({ user }) {
   return (
     <div className="fade">
       <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
-        <div style={{minWidth:0,flex:1}}><div className="pt">Журнал оценок</div><div className="ps">Электронный классный журнал</div></div>
+        <div style={{minWidth:0,flex:1}}><div className="pt">Журнал оценок</div><div className="ps">Нажмите на ячейку — введите оценку — Enter</div></div>
         {classId && <a href={`/api/grades/class/${classId}/export`} className="btn btn-s">📥 CSV</a>}
       </div>
-      <div style={{marginBottom:14}}>
-        <select className="fi" style={{maxWidth:280}} value={classId||''} onChange={e=>setSelClass(parseInt(e.target.value))}>
+      <div style={{marginBottom:14,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+        <select className="fi" style={{maxWidth:280}} value={classId||''} onChange={e=>{setSelClass(parseInt(e.target.value));setEditing(null);}}>
           {(classes||[]).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
+        {saving && <span style={{fontSize:11,color:'var(--muted)'}}>Сохранение...</span>}
       </div>
       {loading ? <Spinner/> : gb ? (
         <div className="card" style={{overflowX:'auto',WebkitOverflowScrolling:'touch'}}>
@@ -2464,7 +3249,11 @@ function GradebookView({ user }) {
               <thead>
                 <tr>
                   <th style={{position:'sticky',left:0,background:'var(--surface2)',zIndex:1}}>Ученик</th>
-                  {(gb.assignments||[]).map(a=><th key={a.id} style={{textAlign:'center',maxWidth:80,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={a.title}>{a.title}</th>)}
+                  {(gb.assignments||[]).map(a=>(
+                    <th key={a.id} style={{textAlign:'center',maxWidth:80,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={`${a.title} (макс: ${a.max_score})`}>
+                      {a.title}<div style={{fontWeight:400,color:'var(--muted)',fontSize:10}}>/{a.max_score}</div>
+                    </th>
+                  ))}
                   <th style={{textAlign:'center'}}>Итог</th>
                   <th style={{textAlign:'center'}}>Оценка</th>
                 </tr>
@@ -2473,11 +3262,32 @@ function GradebookView({ user }) {
                 {(gb.matrix||[]).map((row,i)=>(
                   <tr key={i}>
                     <td style={{fontWeight:600,position:'sticky',left:0,background:'#fff',zIndex:1}}>{row.student.name}</td>
-                    {row.scores.map((s,j)=>(
-                      <td key={j} style={{textAlign:'center'}}>
-                        {s ? <span style={{fontWeight:700,color:gColor((s.score/gb.assignments[j].max_score)*100)}}>{s.score!==null?s.score:'—'}</span> : <span style={{color:'#d1d5db'}}>·</span>}
-                      </td>
-                    ))}
+                    {row.scores.map((s,j)=>{
+                      const isEditing = editing?.r===i && editing?.c===j;
+                      const scoreNum = s?.score != null ? s.score : null;
+                      const pctColor = scoreNum != null ? gColor((scoreNum/gb.assignments[j].max_score)*100) : '#d1d5db';
+                      return (
+                        <td key={j} style={{textAlign:'center',cursor:'pointer',padding:'4px 6px'}}
+                          onClick={()=>!isEditing && startEdit(i, j, scoreNum)}>
+                          {isEditing ? (
+                            <input
+                              autoFocus
+                              style={{width:44,textAlign:'center',padding:'2px 4px',border:'2px solid var(--accent)',borderRadius:4,fontSize:12,outline:'none'}}
+                              value={editVal}
+                              onChange={e=>setEditVal(e.target.value)}
+                              onKeyDown={e=>{
+                                if(e.key==='Enter'){e.preventDefault();saveScore(i,j);}
+                                if(e.key==='Escape'){setEditing(null);}
+                              }}
+                            />
+                          ) : scoreNum != null ? (
+                            <span style={{fontWeight:700,color:pctColor}}>{scoreNum}</span>
+                          ) : (
+                            <span style={{color:'#d1d5db',fontSize:14}}>·</span>
+                          )}
+                        </td>
+                      );
+                    })}
                     <td style={{textAlign:'center',fontWeight:700}}>{row.pct!==null?`${row.pct}%`:'—'}</td>
                     <td style={{textAlign:'center'}}>{row.letter ? <span className="gc" style={{width:30,height:30,fontSize:12,display:'inline-flex',background:gBg(row.pct),color:gColor(row.pct)}}>{row.letter}</span> : '—'}</td>
                   </tr>
@@ -2828,7 +3638,630 @@ function NotifPanel({ onClose, onRead }) {
   );
 }
 
-// ·· SCHEDULE VIEW
+// ══════════════════════════════════════════════════════════════════════════════
+// ·· SCHEDULE MODULE v2  — full rewrite
+//    Architecture:
+//      lessons          — repeating weekly slot
+//      lesson_teachers  — M:M teachers ↔ lessons
+//      lesson_students  — M:M students ↔ individual lessons
+//    Backend: /api/sched (routes/sched.js)
+//    Migration: 20250316000000_lessons.js
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+const SM_DAYS   = ['','Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+const SM_DFULL  = ['','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота','Воскресенье'];
+const SM_WORK   = [1,2,3,4,5,6];          // Mon–Sat
+const SM_COLORS = ['#6366f1','#10b981','#3b82f6','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4'];
+const HOUR_H    = 56;    // px per hour in time-grid
+const GRID_FROM = 7;     // 07:00
+const GRID_TO   = 21;    // 21:00
+
+function smToMins(hhmm) {
+  const [h, m] = (hhmm || '00:00').split(':').map(Number);
+  return h * 60 + m;
+}
+function smAddMins(hhmm, mins) {
+  const t = smToMins(hhmm) + mins;
+  return `${String(Math.floor(t/60)%24).padStart(2,'0')}:${String(t%60).padStart(2,'0')}`;
+}
+function smTop(st)  { return Math.max(0, (smToMins(st) - GRID_FROM * 60) / 60 * HOUR_H); }
+function smHeight(d){ return Math.max((d / 60) * HOUR_H, 22); }
+function smInitials(name) {
+  if (!name) return '?';
+  const parts = name.trim().split(' ');
+  return (parts[0]?.[0] || '') + (parts[1]?.[0] || '');
+}
+
+// ── Lesson card (mobile list) ─────────────────────────────────────────────────
+function LessonListCard({ lesson, onClick }) {
+  const end = smAddMins(lesson.start_time, lesson.duration_min);
+  const teachers = Array.isArray(lesson.teachers) ? lesson.teachers : JSON.parse(lesson.teachers || '[]');
+  return (
+    <div className="lsn-card" onClick={onClick} style={{ marginBottom: 8 }}>
+      <div className="lsn-card-dot" style={{ background: lesson.color || '#6366f1' }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="lsn-card-title">{lesson.title}</div>
+        <div className="lsn-card-sub">
+          {lesson.class_name && <span>{lesson.class_name} · </span>}
+          {teachers.map(t => t.name).join(', ')}
+        </div>
+        {lesson.notes && (
+          <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+            {lesson.notes}
+          </div>
+        )}
+      </div>
+      <div className="lsn-card-time">{lesson.start_time}<br/>{end}</div>
+    </div>
+  );
+}
+
+// ── Lesson detail modal ───────────────────────────────────────────────────────
+function LessonDetailModal({ lesson, canDelete, onDelete, onClose }) {
+  const teachers = Array.isArray(lesson.teachers) ? lesson.teachers : JSON.parse(lesson.teachers || '[]');
+  const students = Array.isArray(lesson.students) ? lesson.students : JSON.parse(lesson.students || '[]');
+  const end = smAddMins(lesson.start_time, lesson.duration_min);
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 'min(460px,96vw)' }} onClick={e => e.stopPropagation()}>
+        {/* Color stripe header */}
+        <div style={{ background: lesson.color || '#6366f1', borderRadius: '10px 10px 0 0', padding: '14px 18px', margin: '-20px -20px 16px', color:'#fff' }}>
+          <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "'Space Grotesk',sans-serif" }}>{lesson.title}</div>
+          <div style={{ fontSize: 12, opacity: 0.85, marginTop: 2 }}>
+            {SM_DFULL[lesson.day_of_week]} · {lesson.start_time} – {end} ({lesson.duration_min} мин)
+          </div>
+        </div>
+        {/* Details */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {lesson.lesson_type === 'group' && lesson.class_name && (
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '8px 12px', background: 'var(--surface2)', borderRadius: 8 }}>
+              <span style={{ fontSize: 18 }}>👥</span>
+              <div>
+                <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 600 }}>ГРУППА</div>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>{lesson.class_name}</div>
+              </div>
+            </div>
+          )}
+          {lesson.lesson_type === 'individual' && students.length > 0 && (
+            <div style={{ padding: '8px 12px', background: 'var(--surface2)', borderRadius: 8 }}>
+              <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 600, marginBottom: 6 }}>УЧЕНИКИ</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {students.map(s => <span key={s.id} className="bdg bb">{s.name}</span>)}
+              </div>
+            </div>
+          )}
+          {teachers.length > 0 && (
+            <div style={{ padding: '8px 12px', background: 'var(--surface2)', borderRadius: 8 }}>
+              <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 600, marginBottom: 6 }}>УЧИТЕЛЯ</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {teachers.map(t => (
+                  <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div className="lsn-avatar" style={{ background: lesson.color || '#6366f1' }}>{smInitials(t.name)}</div>
+                    <span style={{ fontSize: 12, fontWeight: 600 }}>{t.name}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {lesson.notes && (
+            <div style={{ fontSize: 13, color: 'var(--muted)', padding: '8px 12px', background: 'var(--surface2)', borderRadius: 8 }}>
+              💬 {lesson.notes}
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 20, justifyContent: 'flex-end' }}>
+          {canDelete && (
+            <button className="btn btn-d btn-sm" onClick={onDelete}>🗑 Удалить</button>
+          )}
+          <button className="btn btn-s" onClick={onClose}>Закрыть</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Create lesson modal ───────────────────────────────────────────────────────
+function CreateLessonModal({ user, onSave, onClose }) {
+  const [form, setForm] = useState({
+    title: '', dayOfWeek: 1, startTime: '09:00', durationMin: 60,
+    color: '#6366f1', lessonType: 'group', classId: '', notes: '',
+    teacherIds: [user.id], studentIds: [],
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr]       = useState('');
+  const toast = useToast();
+
+  const { data: allClasses } = useApi(() => API.get('/api/classes'));
+  const { data: allTeachers } = useApi(() =>
+    ['center_admin','super_admin'].includes(user.role)
+      ? API.get('/api/users?role=teacher')
+      : Promise.resolve([])
+  );
+  const { data: allStudents } = useApi(() => API.get('/api/users?role=student'));
+
+  function setF(k) { return v => setForm(f => ({ ...f, [k]: v })); }
+
+  function toggleId(key, id) {
+    setForm(f => {
+      const set = new Set(f[key]);
+      set.has(id) ? set.delete(id) : set.add(id);
+      return { ...f, [key]: [...set] };
+    });
+  }
+
+  async function submit(e) {
+    e.preventDefault();
+    setErr('');
+    setSaving(true);
+    try {
+      const parsedClassId = parseInt(form.classId, 10);
+      await API.post('/api/sched', {
+        ...form,
+        classId:     form.lessonType === 'group' && !isNaN(parsedClassId) ? parsedClassId : null,
+        studentIds:  form.lessonType === 'individual' ? form.studentIds : [],
+        teacherIds:  form.teacherIds,
+        durationMin: parseInt(form.durationMin, 10),
+      });
+      toast('Занятие добавлено', 'success');
+      onSave();
+    } catch (ex) {
+      setErr(ex.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const DUR_OPTS = [
+    { v: 30,  l: '30 мин' }, { v: 45,  l: '45 мин' },
+    { v: 60,  l: '1 час'  }, { v: 90,  l: '1.5 ч'  },
+    { v: 120, l: '2 часа' }, { v: 150, l: '2.5 ч'  },
+  ];
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 'min(520px,96vw)', maxHeight: '90dvh', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}
+        onClick={e => e.stopPropagation()}>
+        <div className="modal-t">➕ Новое занятие</div>
+        <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {/* Title */}
+          <div>
+            <label className="fi-label">Название *</label>
+            <input className="fi" value={form.title} onChange={e => setF('title')(e.target.value)} placeholder="Математика / Алгебра..." required />
+          </div>
+          {/* Day + Time + Duration */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+            <div>
+              <label className="fi-label">День</label>
+              <select className="fi" value={form.dayOfWeek} onChange={e => setF('dayOfWeek')(parseInt(e.target.value))}>
+                {SM_WORK.map(d => <option key={d} value={d}>{SM_DFULL[d]}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="fi-label">Начало</label>
+              <input className="fi" type="time" value={form.startTime} onChange={e => setF('startTime')(e.target.value)} required />
+            </div>
+            <div>
+              <label className="fi-label">Длительность</label>
+              <select className="fi" value={form.durationMin} onChange={e => setF('durationMin')(parseInt(e.target.value))}>
+                {DUR_OPTS.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+              </select>
+            </div>
+          </div>
+          {/* Type */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            {[['group','👥 Групповое'],['individual','👤 Индивидуальное']].map(([v,l]) => (
+              <button key={v} type="button"
+                style={{ padding: '10px 8px', border: `2px solid ${form.lessonType===v ? (form.color||'var(--primary)') : 'var(--border)'}`,
+                  borderRadius: 8, background: form.lessonType===v ? (form.color||'var(--primary)')+'18' : 'var(--surface2)',
+                  fontWeight: 700, fontSize: 12, cursor: 'pointer', transition: 'all .15s' }}
+                onClick={() => setF('lessonType')(v)}>
+                {l}
+              </button>
+            ))}
+          </div>
+          {/* Group: class picker */}
+          {form.lessonType === 'group' && (
+            <div>
+              <label className="fi-label">Группа *</label>
+              <select className="fi" value={form.classId} onChange={e => setF('classId')(e.target.value)} required>
+                <option value="">— выбрать —</option>
+                {(allClasses || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+          )}
+          {/* Individual: student picker */}
+          {form.lessonType === 'individual' && (
+            <div>
+              <label className="fi-label">Ученик * (можно несколько)</label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, maxHeight: 120, overflowY: 'auto', padding: '4px 0' }}>
+                {(allStudents || []).map(s => {
+                  const active = form.studentIds.includes(s.id);
+                  return (
+                    <button key={s.id} type="button"
+                      style={{ padding: '4px 10px', border: `1.5px solid ${active ? form.color : 'var(--border)'}`,
+                        borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                        background: active ? form.color+'18' : 'var(--surface2)', transition: 'all .12s' }}
+                      onClick={() => toggleId('studentIds', s.id)}>
+                      {s.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {/* Co-teachers (center_admin only; for teacher it's pre-filled) */}
+          {user.role === 'center_admin' && (allTeachers || []).length > 0 && (
+            <div>
+              <label className="fi-label">Учителя *</label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {(allTeachers || []).map(t => {
+                  const active = form.teacherIds.includes(t.id);
+                  return (
+                    <button key={t.id} type="button"
+                      style={{ padding: '4px 10px', border: `1.5px solid ${active ? form.color : 'var(--border)'}`,
+                        borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                        background: active ? form.color+'18' : 'var(--surface2)', transition: 'all .12s' }}
+                      onClick={() => toggleId('teacherIds', t.id)}>
+                      {t.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {/* Color */}
+          <div>
+            <label className="fi-label">Цвет занятия</label>
+            <div className="color-picker">
+              {SM_COLORS.map(c => (
+                <div key={c} className={`color-swatch${form.color===c?' active':''}`}
+                  style={{ background: c }} onClick={() => setF('color')(c)} />
+              ))}
+            </div>
+          </div>
+          {/* Notes */}
+          <div>
+            <label className="fi-label">Заметки</label>
+            <textarea className="fi" rows={2} value={form.notes} onChange={e => setF('notes')(e.target.value)} placeholder="Кабинет, тема, напоминание..." style={{ resize: 'vertical' }} />
+          </div>
+          {err && (
+            <div style={{ background: 'var(--red-s)', color: 'var(--red)', borderRadius: 8, padding: '8px 12px', fontSize: 12 }}>
+              ⚠️ {err}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button type="button" className="btn btn-s" onClick={onClose}>Отмена</button>
+            <button type="submit" className="btn btn-p" disabled={saving}
+              style={{ background: form.color, boxShadow: `0 8px 24px -6px ${form.color}88` }}>
+              {saving ? 'Создание...' : 'Создать занятие'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ── Desktop time-grid view ────────────────────────────────────────────────────
+function ScheduleTimeGrid({ lessons, canDelete, onDetail }) {
+  const TOTAL_H = GRID_TO - GRID_FROM;
+  const hours   = Array.from({ length: TOTAL_H + 1 }, (_, i) => GRID_FROM + i);
+  const now     = new Date();
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+  const nowTop  = (nowMins - GRID_FROM * 60) / 60 * HOUR_H;
+  const showNow = nowMins >= GRID_FROM * 60 && nowMins < GRID_TO * 60;
+
+  return (
+    <div className="lsn-grid-wrap">
+      {/* Day headers */}
+      <div style={{ display: 'grid', gridTemplateColumns: '44px repeat(6,1fr)', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
+        <div />
+        {SM_WORK.map(d => {
+          const isToday = (now.getDay() || 7) === d;
+          return (
+            <div key={d} style={{ textAlign: 'center', padding: '9px 4px', fontSize: 10, fontWeight: 700, color: isToday ? 'var(--primary)' : 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.08em', borderLeft: '1px solid var(--border)' }}>
+              {SM_DAYS[d]}
+              {isToday && <div style={{ width: 4, height: 4, background: 'var(--primary)', borderRadius: '50%', margin: '3px auto 0' }} />}
+            </div>
+          );
+        })}
+      </div>
+      {/* Time grid body */}
+      <div style={{ display: 'grid', gridTemplateColumns: '44px repeat(6,1fr)', position: 'relative' }}>
+        {/* Time labels column */}
+        <div style={{ position: 'relative', height: TOTAL_H * HOUR_H }}>
+          {hours.map(h => (
+            <div key={h} className="lsn-time-col" style={{ position: 'absolute', top: (h - GRID_FROM) * HOUR_H - 6, right: 6, width: 38 }}>
+              {String(h).padStart(2,'0')}:00
+            </div>
+          ))}
+        </div>
+        {/* Day columns */}
+        {SM_WORK.map(d => {
+          const dayLessons = lessons.filter(l => l.day_of_week === d);
+          const isToday    = (now.getDay() || 7) === d;
+          return (
+            <div key={d} className="lsn-day-col"
+              style={{ height: TOTAL_H * HOUR_H, background: isToday ? 'hsla(160,50%,40%,0.025)' : undefined }}>
+              {/* Hour lines */}
+              {hours.map(h => (
+                <div key={h} className="lsn-hour-line" style={{ top: (h - GRID_FROM) * HOUR_H }} />
+              ))}
+              {/* Now indicator */}
+              {showNow && isToday && (
+                <div className="lsn-now-line" style={{ top: nowTop }} />
+              )}
+              {/* Lesson blocks */}
+              {dayLessons.map(l => {
+                const teachers = Array.isArray(l.teachers) ? l.teachers : JSON.parse(l.teachers || '[]');
+                return (
+                  <div key={l.id} className="lsn-block"
+                    style={{ top: smTop(l.start_time), height: smHeight(l.duration_min), background: (l.color||'#6366f1')+'20', borderLeftColor: l.color||'#6366f1', color: l.color||'#6366f1' }}
+                    onClick={() => onDetail(l)}
+                    title={`${l.title} · ${l.start_time}–${smAddMins(l.start_time, l.duration_min)}`}>
+                    <div className="lsn-block-title">{l.title}</div>
+                    <div className="lsn-block-sub">{l.start_time}–{smAddMins(l.start_time, l.duration_min)}</div>
+                    {teachers.length > 0 && (
+                      <div className="lsn-block-sub">{teachers.map(t => smInitials(t.name)).join(' · ')}</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Admin teacher-list view ───────────────────────────────────────────────────
+function AdminTeacherView({ user }) {
+  const { data: teachers, loading: tLoad } = useApi(() => API.get('/api/sched/teachers'));
+  const [selTeacher, setSelTeacher] = useState(null);
+  const url = selTeacher ? `/api/sched?teacherId=${selTeacher.id}` : '/api/sched';
+  const { data: lessons, loading: lLoad, reload } = useApi(() => API.get(url), [url]);
+  const [detail, setDetail] = useState(null);
+  const confirm = useConfirm();
+  const toast   = useToast();
+
+  async function del(lesson) {
+    const ok = await confirm(`Удалить занятие «${lesson.title}»?`, 'Удалить занятие', { danger: true, confirmText: 'Удалить', icon: '🗑️' });
+    if (!ok) return;
+    try {
+      await API.del(`/api/sched/${lesson.id}`);
+      toast('Занятие удалено', 'success');
+      setDetail(null);
+      reload();
+    } catch (ex) { toast(ex.message, 'error'); }
+  }
+
+  const isMobile = useIsMobile(768);
+  const all = lessons || [];
+
+  return (
+    <div className="fade">
+      <div className="ph" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
+        <div>
+          <div className="pt">Расписание учителей</div>
+          <div className="ps">{all.length} занятий{selTeacher ? ` · ${selTeacher.name}` : ' · все учителя'}</div>
+        </div>
+      </div>
+      {/* Teacher tabs */}
+      {tLoad ? null : (
+        <div className="sched-day-tabs" style={{ marginBottom: 14 }}>
+          <button className={`sched-day-tab${!selTeacher ? ' active' : ''}`} onClick={() => setSelTeacher(null)}>
+            Все
+          </button>
+          {(teachers || []).map(t => (
+            <button key={t.id} className={`sched-day-tab${selTeacher?.id === t.id ? ' active' : ''}`}
+              style={{ minWidth: 'auto', padding: '6px 12px' }}
+              onClick={() => setSelTeacher(t)}>
+              {t.name.split(' ')[0]} &nbsp;<span style={{ fontWeight: 400, fontSize: 9 }}>{t.lesson_count}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {lLoad ? <Spinner /> : (
+        isMobile ? (
+          /* Mobile: grouped by day */
+          <div>
+            {SM_WORK.map(d => {
+              const items = all.filter(l => l.day_of_week === d);
+              if (!items.length) return null;
+              return (
+                <div key={d} style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: 8 }}>{SM_DFULL[d]}</div>
+                  {items.map(l => <LessonListCard key={l.id} lesson={l} onClick={() => setDetail(l)} />)}
+                </div>
+              );
+            })}
+            {!all.length && <div className="empty"><div className="empty-ico">🗓</div>Нет занятий</div>}
+          </div>
+        ) : (
+          /* Desktop: time grid */
+          !all.length
+            ? <div className="empty" style={{ padding: 40 }}><div className="empty-ico">🗓</div>Нет занятий</div>
+            : <ScheduleTimeGrid lessons={all} canDelete={false} onDetail={setDetail} />
+        )
+      )}
+      {detail && (
+        <LessonDetailModal lesson={detail} canDelete={true} onClose={() => setDetail(null)} onDelete={() => del(detail)} />
+      )}
+    </div>
+  );
+}
+
+// ── Teacher view ──────────────────────────────────────────────────────────────
+function TeacherScheduleView({ user }) {
+  const { data: lessons, loading, reload } = useApi(() => API.get('/api/sched'));
+  const [showCreate, setShowCreate] = useState(false);
+  const [detail, setDetail]         = useState(null);
+  const [activeDay, setActiveDay]   = useState(() => {
+    const d = new Date().getDay(); return d === 0 ? 6 : d;
+  });
+  const confirm = useConfirm();
+  const toast   = useToast();
+  const isMobile = useIsMobile(768);
+  const all = lessons || [];
+  const weekCount = all.length;
+
+  async function del(lesson) {
+    const ok = await confirm(`Занятие «${lesson.title}» будет удалено.`, 'Удалить занятие?', { danger: true, confirmText: 'Удалить', icon: '🗑️' });
+    if (!ok) return;
+    try {
+      await API.del(`/api/sched/${lesson.id}`);
+      toast('Удалено', 'success');
+      setDetail(null);
+      reload();
+    } catch (ex) { toast(ex.message, 'error'); }
+  }
+
+  return (
+    <div className="fade">
+      <div className="ph" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
+        <div>
+          <div className="pt">Моё расписание</div>
+          <div className="ps">{weekCount} занятий в неделю</div>
+        </div>
+        <button className="btn btn-p btn-sm" onClick={() => setShowCreate(true)}>+ Занятие</button>
+      </div>
+
+      {loading ? <Spinner /> : (
+        isMobile ? (
+          /* Mobile: day tabs + list */
+          <>
+            <div className="sched-day-tabs">
+              {SM_WORK.map(d => {
+                const isToday = (new Date().getDay() || 7) === d;
+                const count   = all.filter(l => l.day_of_week === d).length;
+                return (
+                  <button key={d}
+                    className={`sched-day-tab${activeDay===d?' active':''}${isToday?' today':''}`}
+                    onClick={() => setActiveDay(d)}>
+                    {SM_DAYS[d]}
+                    {count > 0 && <div style={{ fontSize: 8, color: activeDay===d ? 'rgba(255,255,255,0.7)' : 'var(--primary)', fontWeight: 700, marginTop: 1 }}>{count}</div>}
+                  </button>
+                );
+              })}
+            </div>
+            <div>
+              {all.filter(l => l.day_of_week === activeDay).map(l =>
+                <LessonListCard key={l.id} lesson={l} onClick={() => setDetail(l)} />
+              )}
+              {!all.filter(l => l.day_of_week === activeDay).length && (
+                <div className="empty" style={{ padding: '24px 0' }}><div className="empty-ico">☀️</div>Нет занятий</div>
+              )}
+            </div>
+          </>
+        ) : (
+          /* Desktop: time grid */
+          !all.length
+            ? <div className="empty" style={{ padding: 40 }}><div className="empty-ico">🗓</div>Нет занятий<br/><button className="btn btn-p btn-sm" style={{ marginTop: 12 }} onClick={() => setShowCreate(true)}>Добавить первое</button></div>
+            : <ScheduleTimeGrid lessons={all} canDelete={true} onDetail={setDetail} />
+        )
+      )}
+
+      {showCreate && (
+        <CreateLessonModal user={user} onClose={() => setShowCreate(false)} onSave={() => { setShowCreate(false); reload(); }} />
+      )}
+      {detail && (
+        <LessonDetailModal lesson={detail} canDelete={true} onClose={() => setDetail(null)} onDelete={() => del(detail)} />
+      )}
+    </div>
+  );
+}
+
+// ── Student / Parent view ─────────────────────────────────────────────────────
+function StudentScheduleView({ user }) {
+  const isParent = user.role === 'parent';
+  const { data: children } = useApi(() =>
+    isParent ? API.get('/api/users/me/children') : Promise.resolve(null)
+  );
+  const [childId, setChildId] = useState(null);
+  const effectiveChild = isParent ? (childId || children?.[0]?.id) : null;
+  const url = isParent && effectiveChild ? `/api/sched?studentId=${effectiveChild}` : '/api/sched';
+  const { data: lessons, loading } = useApi(() => {
+    if (isParent && !effectiveChild) return Promise.resolve([]);
+    return API.get(url);
+  }, [url, effectiveChild]);
+
+  const [activeDay, setActiveDay] = useState(() => {
+    const d = new Date().getDay(); return d === 0 ? 6 : d;
+  });
+  const [detail, setDetail] = useState(null);
+  const isMobile = useIsMobile(768);
+  const all = lessons || [];
+
+  return (
+    <div className="fade">
+      <div className="ph">
+        <div className="pt">Расписание</div>
+        <div className="ps">{all.length} занятий в неделю</div>
+      </div>
+      {/* Parent child switcher */}
+      {isParent && children?.length > 1 && (
+        <div className="sched-day-tabs" style={{ marginBottom: 14 }}>
+          {children.map(c => (
+            <button key={c.id}
+              className={`sched-day-tab${effectiveChild===c.id?' active':''}`}
+              style={{ padding: '6px 12px', minWidth: 'auto' }}
+              onClick={() => setChildId(c.id)}>
+              {c.name}
+            </button>
+          ))}
+        </div>
+      )}
+      {loading ? <Spinner /> : (
+        isMobile ? (
+          <>
+            <div className="sched-day-tabs">
+              {SM_WORK.map(d => {
+                const isToday = (new Date().getDay() || 7) === d;
+                const count   = all.filter(l => l.day_of_week === d).length;
+                return (
+                  <button key={d}
+                    className={`sched-day-tab${activeDay===d?' active':''}${isToday?' today':''}`}
+                    onClick={() => setActiveDay(d)}>
+                    {SM_DAYS[d]}
+                    {count > 0 && <div style={{ fontSize: 8, color: activeDay===d ? 'rgba(255,255,255,0.7)' : 'var(--primary)', fontWeight: 700, marginTop: 1 }}>{count}</div>}
+                  </button>
+                );
+              })}
+            </div>
+            <div>
+              {all.filter(l => l.day_of_week === activeDay).map(l =>
+                <LessonListCard key={l.id} lesson={l} onClick={() => setDetail(l)} />
+              )}
+              {!all.filter(l => l.day_of_week === activeDay).length && (
+                <div className="empty" style={{ padding: '24px 0' }}><div className="empty-ico">📚</div>Нет занятий</div>
+              )}
+            </div>
+          </>
+        ) : (
+          !all.length
+            ? <div className="empty" style={{ padding: 40 }}><div className="empty-ico">📚</div>Нет занятий</div>
+            : <ScheduleTimeGrid lessons={all} canDelete={false} onDetail={setDetail} />
+        )
+      )}
+      {detail && (
+        <LessonDetailModal lesson={detail} canDelete={false} onClose={() => setDetail(null)} onDelete={() => {}} />
+      )}
+    </div>
+  );
+}
+
+// ── Main entry point ──────────────────────────────────────────────────────────
+function ScheduleModule({ user }) {
+  if (user.role === 'super_admin') return null;
+  if (user.role === 'center_admin') return <AdminTeacherView user={user} />;
+  if (user.role === 'teacher')      return <TeacherScheduleView user={user} />;
+  return <StudentScheduleView user={user} />;
+}
+
+// ·· SCHEDULE VIEW (legacy — kept intact, no longer used in routing)
 function ScheduleView({ user }) {
   const DAY_NAMES = ['','Пн','Вт','Ср','Чт','Пт','Сб'];
   const DAY_FULL = ['','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота'];
@@ -3067,7 +4500,7 @@ function AppShell({ user: initialUser, center, onLogout }) {
 
   function renderPage() {
     // Shared pages available to all roles
-    if (page==='schedule') return <ScheduleView user={user}/>;
+    if (page==='schedule') return <ScheduleModule user={user}/>;
     if (page==='audit' && ['super_admin','center_admin'].includes(user.role)) return <AuditLogView user={user}/>;
     if (page==='notifications') return <NotificationsPage onRead={reloadNotifs}/>;
     if (page==='profile') return <ProfilePage user={user} onLogout={onLogout} onNameChange={name=>setUser(u=>({...u,name}))}/>;
@@ -3087,13 +4520,13 @@ function AppShell({ user: initialUser, center, onLogout }) {
     if (user.role==='teacher') {
       if (page==='dashboard') return <TeacherDash user={user}/>;
       if (page==='classes') return <ClassesView user={user}/>;
-      if (page==='assignments') return <AssignmentsView user={user}/>;
+      if (page==='assignments') return <HomeworkModule user={user}/>;
       if (page==='gradebook') return <GradebookView user={user}/>;
       if (page==='attendance') return <AttendanceView user={user}/>;
     }
     if (user.role==='student') {
       if (page==='dashboard') return <StudentDash user={user}/>;
-      if (page==='assignments') return <AssignmentsView user={user}/>;
+      if (page==='assignments') return <HomeworkModule user={user}/>;
       if (page==='grades') return <GradesView user={user}/>;
       if (page==='classes') return <ClassesView user={user}/>;
       if (page==='attendance') return <AttendanceView user={user}/>;
@@ -3101,7 +4534,7 @@ function AppShell({ user: initialUser, center, onLogout }) {
     if (user.role==='parent') {
       if (page==='dashboard') return <ParentDash user={user}/>;
       if (page==='grades') return <GradesView user={user}/>;
-      if (page==='assignments') return <AssignmentsView user={user}/>;
+      if (page==='assignments') return <HomeworkModule user={user}/>;
       if (page==='attendance') return <AttendanceView user={user}/>;
     }
     return <div className="empty"><div className="empty-ico">🚧</div><div>В разработке</div></div>;
