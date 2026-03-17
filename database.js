@@ -1,5 +1,5 @@
 'use strict';
-require('dotenv').config();
+require('./load-env');
 const bcrypt = require('bcryptjs');
 
 const env = (process.env.NODE_ENV || process.env.VERCEL_ENV || 'development').trim();
@@ -95,9 +95,11 @@ async function seed() {
     await knex.raw(`ALTER SEQUENCE IF EXISTS ${t}_id_seq RESTART WITH 1`);
   }
 
-  const superHash = await bcrypt.hash(process.env.SUPER_ADMIN_PASSWORD || 'SuperAdmin2025!', 12);
+  const superAdminEmail = process.env.SUPER_ADMIN_EMAIL || 'super@educenter.kz';
+  const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD || 'SuperAdmin2025!';
+  const superHash = await bcrypt.hash(superAdminPassword, 12);
   await db.run(`INSERT INTO users (name,username,email,password_hash,role) VALUES (?,?,?,?,?)`,
-    ['Айдос Сериков', 'super', process.env.SUPER_ADMIN_EMAIL || 'super@educenter.kz', superHash, 'super_admin']);
+    ['Айдос Сериков', 'super', superAdminEmail, superHash, 'super_admin']);
 
   const ctr = await db.run(`INSERT INTO centers (name,code,plan) VALUES (?,?,?) RETURNING id`,
     ['Astana Excellence Academy','AEA-2847','professional']);
@@ -189,7 +191,7 @@ async function seed() {
   }
 
   console.log('\n📋 Демо-аккаунты:');
-  ['super@educenter.kz / SuperAdmin2025!','admin@aea.kz / Admin2025!','nurov@aea.kz / Teacher2025!',
+  [`${superAdminEmail} / ${superAdminPassword}`,'admin@aea.kz / Admin2025!','nurov@aea.kz / Teacher2025!',
    'serikova@aea.kz / Teacher2025!','alina@aea.kz / Student2025!','daniyar@aea.kz / Student2025!','parent1@aea.kz / Parent2025!']
     .forEach(l => console.log(' ', l));
   console.log('\n✅ Seed готов!\n');

@@ -5,7 +5,7 @@
  * Creates only super admin user, no demo data
  */
 
-require('dotenv').config();
+require('./load-env');
 const { db, shutdown } = require('./database');
 const bcrypt = require('bcryptjs');
 

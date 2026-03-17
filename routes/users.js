@@ -8,6 +8,9 @@ const { db } = require('../database');
 router.get('/', ...requireRole('center_admin','super_admin','teacher'), withCenter, async (req, res, next) => {
   try {
     const { role, search, classId } = req.query;
+    const page  = Math.max(1, parseInt(req.query.page)  || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+    const offset = (page - 1) * limit;
 
     if (req.user.role === 'teacher') {
       if (classId) {
@@ -20,18 +23,38 @@ router.get('/', ...requireRole('center_admin','super_admin','teacher'), withCent
       }
     }
 
-    let q = `SELECT id, center_id, name, email, role, is_active, created_at FROM users WHERE center_id = ?`;
-    const params = [req.centerId];
+    // ── Build WHERE clause (shared by main query + count query) ────────────
+    let whereClause = `WHERE center_id = ?`;
+    const baseParams = [req.centerId];
 
     if (req.user.role === 'teacher') {
-      q += ` AND role = 'student'`;
+      whereClause += ` AND role = 'student'`;
     } else {
-      if (role) { q += ` AND role = ?`; params.push(role); }
+      if (role) { whereClause += ` AND role = ?`; baseParams.push(role); }
     }
-    if (search) { q += ` AND (name ILIKE ? OR email ILIKE ?)`; params.push(`%${search}%`, `%${search}%`); }
-    q += ` ORDER BY name ASC`;
+    if (search) {
+      whereClause += ` AND (name ILIKE ? OR email ILIKE ?)`;
+      baseParams.push(`%${search}%`, `%${search}%`);
+    }
 
-    res.json(await db.all(q, params));
+    // Total count — reuses same parameterized clause, no string interpolation
+    const countRow = await db.get(
+      `SELECT COUNT(*) AS total FROM users ${whereClause}`,
+      baseParams
+    );
+    const total = parseInt(countRow?.total || 0);
+
+    // Main query — add pagination params on top of shared base params
+    const rows = await db.all(
+      `SELECT id, center_id, name, email, role, is_active, created_at
+       FROM users ${whereClause} ORDER BY name ASC LIMIT ? OFFSET ?`,
+      [...baseParams, limit, offset]
+    );
+
+    res.setHeader('X-Total-Count', total);
+    res.setHeader('X-Page', page);
+    res.setHeader('X-Limit', limit);
+    res.json(rows);
   } catch (err) { next(err); }
 });
 
@@ -44,6 +67,33 @@ router.get('/me/children', ...requireRole('parent'), async (req, res, next) => {
       WHERE ps.parent_id = ?
     `, [req.user.id]);
     res.json(children);
+  } catch (err) { next(err); }
+});
+
+// ── PATCH /api/users/me ─────────────────────────────────────────────────────
+// NOTE: Placed before GET /:id to keep all /me routes grouped and prevent
+// any future GET /me from being shadowed by the /:id wildcard.
+router.patch('/me', require('../middleware/auth').authenticate, async (req, res, next) => {
+  try {
+    const { name, email } = req.body;
+    const updates = {};
+    if (name !== undefined) {
+      if (!String(name).trim()) return res.status(400).json({ error: 'Name required' });
+      if (String(name).trim().length > 200) return res.status(400).json({ error: 'Name must be under 200 characters' });
+      updates.name = String(name).trim();
+    }
+    if (email !== undefined) {
+      const trimmed = String(email).trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return res.status(400).json({ error: 'Invalid email' });
+      const existing = await db.get(`SELECT id FROM users WHERE email = ? AND id != ?`, [trimmed, req.user.id]);
+      if (existing) return res.status(409).json({ error: 'Email already in use' });
+      updates.email = trimmed;
+    }
+    if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nothing to update' });
+    const sets = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+    await db.run(`UPDATE users SET ${sets} WHERE id = ?`, [...Object.values(updates), req.user.id]);
+    const updated = await db.get(`SELECT id, name, email, role, center_id AS "centerId" FROM users WHERE id = ?`, [req.user.id]);
+    res.json(updated);
   } catch (err) { next(err); }
 });
 
@@ -72,31 +122,6 @@ router.get('/:id', ...requireRole('center_admin','super_admin','teacher','parent
       `, [userId]);
     }
     res.json(user);
-  } catch (err) { next(err); }
-});
-
-// ── PATCH /api/users/me ─────────────────────────────────────────────────────
-router.patch('/me', require('../middleware/auth').authenticate, async (req, res, next) => {
-  try {
-    const { name, email } = req.body;
-    const updates = {};
-    if (name !== undefined) {
-      if (!String(name).trim()) return res.status(400).json({ error: 'Name required' });
-      if (String(name).trim().length > 200) return res.status(400).json({ error: 'Name must be under 200 characters' });
-      updates.name = String(name).trim();
-    }
-    if (email !== undefined) {
-      const trimmed = String(email).trim().toLowerCase();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return res.status(400).json({ error: 'Invalid email' });
-      const existing = await db.get(`SELECT id FROM users WHERE email = ? AND id != ?`, [trimmed, req.user.id]);
-      if (existing) return res.status(409).json({ error: 'Email already in use' });
-      updates.email = trimmed;
-    }
-    if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nothing to update' });
-    const sets = Object.keys(updates).map(k => `${k} = ?`).join(', ');
-    await db.run(`UPDATE users SET ${sets} WHERE id = ?`, [...Object.values(updates), req.user.id]);
-    const updated = await db.get(`SELECT id, name, email, role, center_id AS "centerId" FROM users WHERE id = ?`, [req.user.id]);
-    res.json(updated);
   } catch (err) { next(err); }
 });
 

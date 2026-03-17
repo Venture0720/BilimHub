@@ -7,21 +7,34 @@ const { db, transaction } = require('../database');
 router.get('/', authenticate, withCenter, async (req, res, next) => {
   try {
     const { role, id } = req.user;
+    const { search } = req.query;
     let classes;
 
     if (role === 'super_admin' || role === 'center_admin') {
-      classes = await db.all(`
+      let q = `
         SELECT c.*, u.name AS teacher_name,
           (SELECT COUNT(*) FROM enrollments WHERE class_id = c.id) AS student_count
         FROM classes c LEFT JOIN users u ON c.teacher_id = u.id
-        WHERE c.center_id = ? AND c.is_active = 1 ORDER BY c.name
-      `, [req.centerId]);
+        WHERE c.center_id = ? AND c.is_active = 1`;
+      const params = [req.centerId];
+      if (search) {
+        q += ` AND (c.name ILIKE ? OR c.subject ILIKE ?)`;
+        params.push(`%${search}%`, `%${search}%`);
+      }
+      q += ` ORDER BY c.name LIMIT 200`;
+      classes = await db.all(q, params);
     } else if (role === 'teacher') {
-      classes = await db.all(`
+      let q = `
         SELECT c.*,
           (SELECT COUNT(*) FROM enrollments WHERE class_id = c.id) AS student_count
-        FROM classes c WHERE c.center_id = ? AND c.teacher_id = ? AND c.is_active = 1 ORDER BY c.name
-      `, [req.centerId, id]);
+        FROM classes c WHERE c.center_id = ? AND c.teacher_id = ? AND c.is_active = 1`;
+      const params = [req.centerId, id];
+      if (search) {
+        q += ` AND (c.name ILIKE ? OR c.subject ILIKE ?)`;
+        params.push(`%${search}%`, `%${search}%`);
+      }
+      q += ` ORDER BY c.name`;
+      classes = await db.all(q, params);
     } else if (role === 'student') {
       classes = await db.all(`
         SELECT c.*, u.name AS teacher_name,

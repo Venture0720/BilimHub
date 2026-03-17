@@ -1,5 +1,5 @@
 'use strict';
-require('dotenv').config();
+require('./load-env');
 
 module.exports = {
   development: {
@@ -18,25 +18,28 @@ module.exports = {
 
   production: {
     client: 'pg',
-    connection: process.env.DATABASE_URL
-      ? { connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } }
-      : {
-          host: process.env.DB_HOST,
-          port: parseInt(process.env.DB_PORT || '5432'),
-          database: process.env.DB_NAME,
-          user: process.env.DB_USER,
-          password: process.env.DB_PASSWORD,
-          ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
-        },
+    connection: (() => {
+      // DB_SSL_REJECT_UNAUTHORIZED: set to 'false' ONLY if your cloud provider uses
+      // self-signed certs (e.g., some PaaS platforms). Default is true (secure).
+      const rejectUnauthorized = process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false';
+      if (process.env.DATABASE_URL) {
+        return { connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized } };
+      }
+      return {
+        host: process.env.DB_HOST,
+        port: parseInt(process.env.DB_PORT || '5432'),
+        database: process.env.DB_NAME,
+        user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
+        ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized } : false,
+      };
+    })(),
     pool: {
       min: 0,
-      max: 1,
+      max: 10,
       acquireTimeoutMillis: 30000,
-      createTimeoutMillis: 30000,
-      destroyTimeoutMillis: 5000,
-      idleTimeoutMillis: 500,
-      reapIntervalMillis: 200,
-      createRetryIntervalMillis: 200,
+      idleTimeoutMillis: 10000,
+      reapIntervalMillis: 1000,
     },
     migrations: { directory: './migrations' },
     seeds: { directory: './seeds' },

@@ -1,5 +1,10 @@
 'use strict';
-require('dotenv').config();
+require('./load-env');
+
+// Sentry is initialized in instrument.js (loaded via node --require ./instrument.js).
+// We require the already-initialized singleton here only to call setupExpressErrorHandler.
+const Sentry = require('@sentry/node');
+
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
@@ -24,9 +29,9 @@ if (DEFAULT_SECRETS.includes(process.env.JWT_ACCESS_SECRET) || DEFAULT_SECRETS.i
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ── Ensure uploads dir exists (use /tmp in serverless environments)
-const UPLOADS_DIR = path.resolve(process.env.UPLOADS_DIR || (process.env.VERCEL ? '/tmp/uploads' : './uploads'));
-try { if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true }); } catch (e) { /* read-only fs in serverless */ }
+// ── Ensure uploads dir exists (persistent filesystem — Render/Railway mount or local disk)
+const UPLOADS_DIR = path.resolve(process.env.UPLOADS_DIR || './uploads');
+try { if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true }); } catch (e) { logger.warn({ err: e }, 'Could not create uploads directory'); }
 
 // ── Security & parsing middleware
 app.use(helmet({
@@ -68,15 +73,22 @@ app.use(pinoHttp({
   },
 }));
 
-// CORS
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',').map(s => s.trim());
+// ── CORS — split deployment: React frontend on Vercel, API on Render/Railway ─
+// Set FRONTEND_URL env var to your Vercel deployment URL in production.
+// Multiple origins can be added by extending the FRONTEND_ORIGINS array.
+const FRONTEND_ORIGINS = [
+  'http://localhost:5173',  // Vite dev server
+  'http://localhost:3000',  // integration tests / legacy
+  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL.trim()] : []),
+];
 app.use(cors({
   origin: (origin, cb) => {
-    // In dev, allow all origins (needed for mobile on local network)
-    if (!origin || process.env.NODE_ENV !== 'production' || allowedOrigins.includes(origin)) return cb(null, true);
-    cb(new Error('Not allowed by CORS'));
+    // Allow requests with no Origin header (curl, server-to-server) only in dev
+    if (!origin && process.env.NODE_ENV !== 'production') return cb(null, true);
+    if (origin && FRONTEND_ORIGINS.includes(origin)) return cb(null, true);
+    cb(new Error(`CORS: origin '${origin}' not allowed`));
   },
-  credentials: true,
+  credentials: true,  // required — we use HttpOnly cookies for refresh tokens
 }));
 
 // Global rate limit: 200 req/min per IP
@@ -87,14 +99,11 @@ app.use(rateLimit({
   legacyHeaders: false,
 }));
 
-// ── Static frontend (no-cache for index.html to pick up updates)
-app.use(express.static(path.join(__dirname, 'dist'), {
-  setHeaders: (res, filePath) => {
-    if (filePath.endsWith('.html')) {
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    }
-  },
-}));
+// ── Sentry integration test — REMOVE AFTER VERIFYING IN SENTRY DASHBOARD ─────
+// Positioned first so no other route/middleware can intercept it.
+app.get('/debug-sentry', (_req, _res) => {
+  throw new Error('Sentry test error — if you see this in Sentry Issues, the integration is working ✓');
+});
 
 // ── Audit middleware (log all mutating API requests)
 app.use('/api', require('./middleware/audit').auditMiddleware);
@@ -108,7 +117,9 @@ v1.use('/users',         require('./routes/users'));
 v1.use('/classes',       require('./routes/classes'));
 v1.use('/assignments',   require('./routes/assignments'));
 v1.use('/submissions',   require('./routes/submissions'));
-v1.use('/grades',        require('./routes/grades'));  v1.use('/hw',            require('./routes/hw'));v1.use('/attendance',    require('./routes/attendance'));
+v1.use('/grades',        require('./routes/grades'));
+v1.use('/hw',            require('./routes/hw'));
+v1.use('/attendance',    require('./routes/attendance'));
 v1.use('/notifications', require('./routes/notifications'));
 v1.use('/schedule',      require('./routes/schedule'));
 v1.use('/sched',         require('./routes/sched'));
@@ -116,7 +127,6 @@ v1.use('/audit',         require('./routes/audit'));
 v1.use('/cleanup',       require('./routes/data-cleanup'));
 
 app.use('/api/v1', v1);
-app.use('/api', v1);  // backward-compatible alias
 
 // Serve uploaded files (authenticated users only — checked via query token)
 // Force download (attachment) to prevent inline rendering of potentially malicious content
@@ -131,20 +141,23 @@ app.use('/uploads', require('./middleware/auth').serveUpload, express.static(UPL
 app.get('/health', async (req, res) => {
   try {
     const { db } = require('./database');
-    await db.get('SELECT 1');
+    await db.get('SELECT 1 AS ok');
     res.json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
   } catch {
     res.status(503).json({ status: 'error', reason: 'database unavailable' });
   }
 });
 
-// ── SPA fallback — serve index.html for non-API routes
-app.get(/^(?!\/api).*$/, (req, res) => {
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-});
 
-// ── Global error handler
+// ── Sentry error handler — MUST be after all routes, before custom error handler
+Sentry.setupExpressErrorHandler(app);
+
+// ── Custom error handler
 app.use((err, req, res, next) => {
+  // Belt-and-suspenders: capture in Sentry even if setupExpressErrorHandler
+  // already fired — duplicate events are deduplicated by Sentry automatically.
+  Sentry.captureException(err);
+
   const status = err.status || 500;
   if (status === 500) logger.error({ err }, 'Unhandled server error');
   res.status(status).json({
@@ -156,8 +169,15 @@ app.use((err, req, res, next) => {
 });
 
 if (require.main === module) {
+  // ── Production startup warnings ─────────────────────────────────────────────
+  if (process.env.NODE_ENV === 'production') {
+    if (!process.env.FRONTEND_URL) {
+      logger.warn('FRONTEND_URL is not set. CORS will block all cross-origin requests in production. Set FRONTEND_URL to your Vercel frontend URL (e.g. https://bilimhub.vercel.app).');
+    }
+  }
+
   const server = app.listen(PORT, '0.0.0.0', () => {
-    logger.info({ port: PORT, env: process.env.NODE_ENV || 'development', db: `${process.env.PG_HOST || 'localhost'}:${process.env.PG_PORT || '5432'}/${process.env.PG_DATABASE || 'bilimhub'}` }, 'BilimHub server started');
+    logger.info({ port: PORT, env: process.env.NODE_ENV || 'development', db: `${process.env.DB_HOST || 'localhost'}:${process.env.DB_PORT || '5432'}/${process.env.DB_NAME || 'bilimhub'}` }, 'BilimHub server started');
     // Log local network IP for mobile access
     const nets = require('os').networkInterfaces();
     for (const name of Object.keys(nets)) {

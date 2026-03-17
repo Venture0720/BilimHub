@@ -41,28 +41,28 @@ router.get('/stats', ...requireRole('center_admin', 'super_admin'), async (req, 
     const { days = 30 } = req.query;
     const { role, center_id } = req.user;
 
-    let filter = '';
-    const params = [];
-    if (role === 'center_admin') {
-      filter = `AND (al.user_id IN (SELECT id FROM users WHERE center_id = ?) OR al.user_id IS NULL)`;
-      params.push(center_id);
-    }
-
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - parseInt(days));
-    params.push(cutoff.toISOString());
+    const cutoffISO = cutoff.toISOString();
+
+    let centerFilter = '';
+    const baseParams = [cutoffISO];
+    if (role === 'center_admin') {
+      centerFilter = `AND (al.user_id IN (SELECT id FROM users WHERE center_id = ?) OR al.user_id IS NULL)`;
+      baseParams.push(center_id);
+    }
 
     const stats = await db.all(`
       SELECT al.action, COUNT(*) AS count
       FROM audit_logs al
-      WHERE al.created_at > ? ${filter ? filter.replace('AND', 'AND') : ''}
+      WHERE al.created_at > ? ${centerFilter}
       GROUP BY al.action ORDER BY count DESC LIMIT 20
-    `, role === 'center_admin' ? [center_id, cutoff.toISOString()] : [cutoff.toISOString()]);
+    `, baseParams);
 
     const totalRow = await db.get(`
       SELECT COUNT(*) AS total FROM audit_logs al
-      WHERE al.created_at > ? ${filter}
-    `, role === 'center_admin' ? [cutoff.toISOString(), center_id] : [cutoff.toISOString()]);
+      WHERE al.created_at > ? ${centerFilter}
+    `, baseParams);
 
     res.json({ total: totalRow.total, actions: stats, period_days: parseInt(days) });
   } catch (err) { next(err); }

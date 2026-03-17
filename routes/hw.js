@@ -1,14 +1,6 @@
 'use strict';
 /**
  * /api/hw — Homework & Grading Module (v2)
- *
- * Key improvement over v1:
- *  File uploads use Vercel Blob CLIENT tokens so the browser streams the file
- *  directly to the CDN. The serverless function only handles small JSON bodies,
- *  which completely bypasses Vercel's 4.5 MB serverless body limit.
- *
- * Lifecycle:  assignment created → student submits → teacher grades → student sees result
- *             student may re-submit if teacher "returns" the work before deadline
  */
 
 const router = require('express').Router();
@@ -17,6 +9,7 @@ const crypto = require('crypto');
 
 const { authenticate, requireRole } = require('../middleware/auth');
 const { db } = require('../database');
+const { validate } = require('../utils/validate');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -111,6 +104,9 @@ router.get('/assignments', authenticate, async (req, res, next) => {
   try {
     const { role, id, center_id } = req.user;
     const { classId } = req.query;
+    const page  = Math.max(1, parseInt(req.query.page)  || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+    const offset = (page - 1) * limit;
 
     if (role === 'teacher') {
       let q = `
@@ -128,7 +124,8 @@ router.get('/assignments', authenticate, async (req, res, next) => {
       `;
       const params = [id, center_id];
       if (classId) { q += ' AND a.class_id = ?'; params.push(classId); }
-      q += ' ORDER BY a.due_date ASC';
+      q += ' ORDER BY a.due_date ASC LIMIT ? OFFSET ?';
+      params.push(limit, offset);
       return res.json(await db.all(q, params));
     }
 
@@ -149,7 +146,9 @@ router.get('/assignments', authenticate, async (req, res, next) => {
       `;
       const params = [cid];
       if (classId) { q += ' AND a.class_id = ?'; params.push(classId); }
-      return res.json(await db.all(q + ' ORDER BY a.created_at DESC', params));
+      q += ' ORDER BY a.created_at DESC LIMIT ? OFFSET ?';
+      params.push(limit, offset);
+      return res.json(await db.all(q, params));
     }
 
     if (role === 'student') {
@@ -171,7 +170,8 @@ router.get('/assignments', authenticate, async (req, res, next) => {
       `;
       const params = [id, id, center_id];
       if (classId) { q += ' AND a.class_id = ?'; params.push(classId); }
-      q += ' ORDER BY a.due_date ASC';
+      q += ' ORDER BY a.due_date ASC LIMIT ? OFFSET ?';
+      params.push(limit, offset);
       return res.json(await db.all(q, params));
     }
 
@@ -520,11 +520,14 @@ router.post('/submissions/:id/grade',
         return res.status(400).json({ error: `Оценка должна быть от 0 до ${sub.max_score}` });
       }
 
+      // Cap feedback to 2000 chars to prevent excessive storage
+      const feedbackText = feedback ? String(feedback).slice(0, 2000) : null;
+
       await db.run(`
         UPDATE submissions
         SET score = ?, feedback = ?, status = 'graded', graded_by = ?, graded_at = NOW()
         WHERE id = ?
-      `, [s, feedback ?? null, id, subId]);
+      `, [s, feedbackText, id, subId]);
 
       // Notify student
       await db.run(
@@ -562,9 +565,10 @@ router.post('/submissions/:id/return',
       if (role === 'teacher' && sub.teacher_id !== id) return res.status(403).json({ error: 'Forbidden' });
 
       const { feedback } = req.body;
+      const feedbackText = feedback ? String(feedback).slice(0, 2000) : null;
       await db.run(
         `UPDATE submissions SET status = 'returned', feedback = ? WHERE id = ?`,
-        [feedback || null, subId]);
+        [feedbackText, subId]);
 
       await db.run(
         `INSERT INTO notifications (user_id, title, body, type) VALUES (?,?,?,?)`,

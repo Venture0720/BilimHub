@@ -18,13 +18,18 @@ export const isMobile = isNative || /Android|iPhone|iPad|iPod/i.test(navigator.u
 
 /**
  * Base URL for API calls.
- * On web (browser): empty string (relative URLs work fine with the same-origin server).
- * On native (Capacitor): points to the backend server on the local network.
- * Set VITE_API_URL env var to override, or it falls back to the LAN IP.
+ *
+ * Web (browser):
+ *   - Production (Vercel): VITE_API_BASE_URL must be set to the backend URL,
+ *     e.g. https://bilimhub-api.onrender.com  — set this in Vercel project env vars.
+ *   - Development: empty string — Vite proxy rewrites /api → http://localhost:3000.
+ *
+ * Native (Capacitor / Android):
+ *   - VITE_API_URL overrides the hardcoded LAN IP.
  */
 export const API_BASE = isNative
   ? (import.meta.env.VITE_API_URL || 'http://192.168.1.177:3000')
-  : '';
+  : (import.meta.env.VITE_API_BASE_URL || '');
 
 /**
  * One-time native bridge initialization.

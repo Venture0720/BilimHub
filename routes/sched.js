@@ -15,7 +15,6 @@
  *   parent       → read-only; same as their linked student
  */
 
-'use strict';
 const router = require('express').Router();
 const { authenticate, requireRole } = require('../middleware/auth');
 const { db } = require('../database');

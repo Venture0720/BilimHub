@@ -7,8 +7,8 @@
     "node": "22.x"
   },
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js",
+    "start": "node --require ./instrument.js server.js",
+    "dev": "nodemon --require ./instrument.js server.js",
     "dev:client": "vite --config vite.config.js",
     "build": "vite build --config vite.config.js",
     "preview": "vite preview --config vite.config.js",
@@ -23,12 +23,14 @@
     "cap:run": "npx cap run android"
   },
   "dependencies": {
-    "@vercel/blob": "^2.3.1",
     "@capacitor/app": "^8.0.1",
     "@capacitor/haptics": "^8.0.1",
     "@capacitor/keyboard": "^8.0.1",
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.1",
+    "@sentry/node": "^10.44.0",
+    "@sentry/profiling-node": "^10.44.0",
+    "@vercel/blob": "^2.3.1",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",

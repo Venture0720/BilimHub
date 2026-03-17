@@ -5,17 +5,11 @@
   "outputDirectory": "dist",
   "framework": null,
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api" },
-    { "source": "/uploads/(.*)", "destination": "/api" },
-    { "source": "/health", "destination": "/api" },
-    { "source": "/((?!assets|icons|manifest|sw|registerSW|workbox).*)", "destination": "/index.html" }
-  ],
-  "functions": {
-    "api/index.js": {
-      "maxDuration": 30,
-      "memory": 512
+    {
+      "source": "/((?!assets|icons|manifest|sw|registerSW|workbox).*)",
+      "destination": "/index.html"
     }
-  },
+  ],
   "headers": [
     {
       "source": "/assets/(.*)",

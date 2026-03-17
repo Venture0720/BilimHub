@@ -30,11 +30,17 @@ function auditMiddleware(req, res, next) {
       const path = req.originalUrl.split('?')[0];
       const action = `${req.method} ${path}`;
 
-      // Extract entity info from URL
+      // Extract entity info from URL — strip /api and /api/v{N} prefix first
       const parts = path.split('/').filter(Boolean);
-      let entityType = parts[1] || null; // e.g., 'auth', 'classes', 'assignments'
+      // Skip 'api' and version segment (e.g. 'v1') if present
+      let resourceIdx = 0;
+      if (parts[0] === 'api') resourceIdx = 1;
+      if (parts[resourceIdx] && /^v\d+$/.test(parts[resourceIdx])) resourceIdx++;
+      let entityType = parts[resourceIdx] || null; // e.g., 'classes', 'assignments', 'users'
       let entityId = null;
-      if (parts.length >= 3 && /^\d+$/.test(parts[2])) entityId = parseInt(parts[2]);
+      if (parts.length > resourceIdx + 1 && /^\d+$/.test(parts[resourceIdx + 1])) {
+        entityId = parseInt(parts[resourceIdx + 1]);
+      }
 
       // Sanitize: only log safe, known fields (allowlist approach)
       let details = null;

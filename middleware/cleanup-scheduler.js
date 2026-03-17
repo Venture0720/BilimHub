@@ -4,6 +4,7 @@
 'use strict';
 const cron = require('node-cron');
 const CleanupOrchestrator = require('../services/cleanup');
+const { db } = require('../database');
 
 let dailyJob = null;
 let weeklyJob = null;
@@ -25,6 +26,12 @@ function initCleanupScheduler() {
     } catch (error) {
       console.error('❌ [CRON] Daily cleanup failed:', error);
     }
+
+    // Purge expired password reset tokens
+    try {
+      const { changes } = await db.run(`DELETE FROM password_reset_tokens WHERE expires_at < NOW() OR used_at IS NOT NULL`);
+      if (changes > 0) console.log(`🔑 [CRON] Purged ${changes} expired/used password reset tokens`);
+    } catch (e) { console.error('[CRON] Password reset token cleanup error:', e.message); }
   }, {
     scheduled: true,
     timezone: 'Asia/Almaty' // Казахстанское время

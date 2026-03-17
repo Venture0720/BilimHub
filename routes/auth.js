@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const { db, transaction } = require('../database');
 const { signAccess, signRefresh, verifyRefresh, authenticate } = require('../middleware/auth');
+const { validate } = require('../utils/validate');
 
 const authLimiter = rateLimit({ windowMs: 15 * 60_000, max: 20, message: { error: 'Too many attempts, try again later' } });
 
@@ -237,6 +238,80 @@ router.post('/change-password', authenticate, async (req, res, next) => {
     await db.run(`DELETE FROM refresh_tokens WHERE user_id = ?`, [req.user.id]);
 
     res.clearCookie('refreshToken', { path: '/api/auth/refresh' });
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// ── POST /api/auth/forgot-password ────────────────────────────────────────────
+// Rate-limit tightly to prevent email enumeration abuse
+const forgotLimiter = rateLimit({ windowMs: 15 * 60_000, max: 5, message: { error: 'Too many attempts, please try again later' } });
+router.post('/forgot-password', forgotLimiter, async (req, res, next) => {
+  try {
+    const err = validate({ email: 'required|email' }, req.body);
+    if (err) return res.status(400).json({ error: err });
+
+    const email = String(req.body.email).toLowerCase().trim();
+
+    // Always respond OK to prevent email enumeration
+    const user = await db.get(`SELECT id, email, name, is_active FROM users WHERE email = ? AND is_active = 1`, [email]);
+    if (!user) return res.json({ ok: true });
+
+    // Invalidate any existing unused reset tokens for this user
+    await db.run(`DELETE FROM password_reset_tokens WHERE user_id = ? AND used_at IS NULL`, [user.id]);
+
+    // Generate a secure random token (32 bytes = 64 hex chars)
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
+
+    await db.run(
+      `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (?,?,?)`,
+      [user.id, tokenHash, expiresAt]
+    );
+
+    // Build reset URL
+    const appUrl = (process.env.APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+    const resetUrl = `${appUrl}/reset-password?token=${rawToken}`;
+
+    // TODO: send email via nodemailer when SMTP is configured.
+    // For now, log the link so admin can relay it manually.
+    const { logger } = require('../lib/logger');
+    logger.info({ userId: user.id, email: user.email, resetUrl }, 'Password reset requested — send this URL to the user');
+
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// ── POST /api/auth/reset-password ─────────────────────────────────────────────
+const resetLimiter = rateLimit({ windowMs: 15 * 60_000, max: 10, message: { error: 'Too many attempts, please try again later' } });
+router.post('/reset-password', resetLimiter, async (req, res, next) => {
+  try {
+    const err = validate({ token: 'required|string', newPassword: 'required|string|min:8|max:128' }, req.body);
+    if (err) return res.status(400).json({ error: err });
+
+    const { token, newPassword } = req.body;
+    const tokenHash = crypto.createHash('sha256').update(String(token)).digest('hex');
+
+    const resetRecord = await db.get(`
+      SELECT prt.*, u.id AS uid, u.is_active
+      FROM password_reset_tokens prt
+      JOIN users u ON u.id = prt.user_id
+      WHERE prt.token_hash = ? AND prt.used_at IS NULL AND prt.expires_at > NOW()
+    `, [tokenHash]);
+
+    if (!resetRecord || !resetRecord.is_active) {
+      return res.status(400).json({ error: 'Неверный или истёкший токен сброса пароля' });
+    }
+
+    const newHash = await bcrypt.hash(newPassword, 12);
+
+    await transaction(async (trx) => {
+      await trx.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, resetRecord.uid]);
+      await trx.run(`UPDATE password_reset_tokens SET used_at = NOW() WHERE token_hash = ?`, [tokenHash]);
+      // Invalidate all sessions for security
+      await trx.run(`DELETE FROM refresh_tokens WHERE user_id = ?`, [resetRecord.uid]);
+    });
+
     res.json({ ok: true });
   } catch (err) { next(err); }
 });

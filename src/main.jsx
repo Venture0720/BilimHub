@@ -165,7 +165,7 @@ const API = (() => {
       const errData = await res.json().catch(() => ({}));
       if (errData.code === 'TOKEN_EXPIRED' || errData.error === 'No token provided' || errData.error === 'Invalid token') {
         // Try refresh
-        const rr = await fetch(API_BASE + '/api/auth/refresh', { method: 'POST', credentials: 'include' });
+        const rr = await fetch(API_BASE + '/api/v1/auth/refresh', { method: 'POST', credentials: 'include' });
         if (rr.ok) {
           const { accessToken, user } = await rr.json();
           setToken(accessToken); setUser(user);
@@ -193,7 +193,7 @@ const API = (() => {
     patch: (url, body) => req('PATCH', url, body),
     del: (url) => req('DELETE', url),
     login: async (username, password) => {
-      const d = await fetch(API_BASE + '/api/auth/login', {
+      const d = await fetch(API_BASE + '/api/v1/auth/login', {
         method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
@@ -204,7 +204,7 @@ const API = (() => {
       return data;
     },
     register: async (name, email, password, inviteToken) => {
-      const d = await fetch(API_BASE + '/api/auth/register', {
+      const d = await fetch(API_BASE + '/api/v1/auth/register', {
         method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, email, password, inviteToken }),
@@ -215,7 +215,7 @@ const API = (() => {
       return data;
     },
     logout: async () => {
-      await fetch(API_BASE + '/api/auth/logout', { method: 'POST', credentials: 'include', headers: { Authorization: `Bearer ${_accessToken}` } }).catch(() => {});
+      await fetch(API_BASE + '/api/v1/auth/logout', { method: 'POST', credentials: 'include', headers: { Authorization: `Bearer ${_accessToken}` } }).catch(() => {});
       setToken(null); setUser(null);
     },
     tryRestoreSession: async () => {
@@ -223,7 +223,7 @@ const API = (() => {
       // If we have a token in memory, try /me; otherwise try refresh
       if (_accessToken) {
         try {
-          const data = await req('GET', '/api/auth/me');
+          const data = await req('GET', '/api/v1/auth/me');
           if (savedUserId && data.user && savedUserId !== data.user.id) {
             setToken(null); setUser(null);
             return null;
@@ -233,7 +233,7 @@ const API = (() => {
       }
       // No token in memory — try silent refresh via httpOnly cookie
       try {
-        const rr = await fetch(API_BASE + '/api/auth/refresh', { method: 'POST', credentials: 'include' });
+        const rr = await fetch(API_BASE + '/api/v1/auth/refresh', { method: 'POST', credentials: 'include' });
         if (rr.ok) {
           const { accessToken, user } = await rr.json();
           setToken(accessToken); setUser(user);
@@ -392,166 +392,39 @@ function ResponsiveTable({ headers, rows, renderRow, renderCard, emptyIcon, empt
   );
 }
 
-// ── LANDING PAGE ──────────────────────────────────────────────────────────────
-function LandingPage({ onGetStarted, onLogin }) {
-  useEffect(() => {
-    // Simple fade-in animations without framer-motion
-    const observer = new IntersectionObserver(
-      entries => entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          entry.target.style.opacity = '1';
-          entry.target.style.transform = 'translateY(0)';
-        }
-      }),
-      { threshold: 0.1 }
-    );
-    document.querySelectorAll('.animate-on-scroll').forEach(el => {
-      el.style.opacity = '0';
-      el.style.transform = 'translateY(20px)';
-      el.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
-      observer.observe(el);
-    });
-    return () => observer.disconnect();
-  }, []);
 
-  return (
-    <div className="landing">
-      {/* Navbar */}
-      <nav className="landing-nav" style={{opacity:0,animation:'fadeDown 0.5s ease forwards'}}>
-        <div className="landing-logo">
-          <div className="landing-logo-icon">B</div>
-          <span>BilimHub</span>
-        </div>
-        <div className="landing-nav-links">
-          <a href="#features" className="landing-nav-link">Возможности</a>
-          <a href="#benefits" className="landing-nav-link">Преимущества</a>
-          <a href="#" className="landing-nav-link" onClick={e=>{e.preventDefault();alert('Контакт: info@bilimhub.kz')}}>Контакты</a>
-        </div>
-        <div className="landing-nav-cta">
-          <button className="btn btn-s" onClick={onLogin}>Вход</button>
-          <button className="btn btn-p" onClick={onGetStarted}>Начать</button>
-        </div>
-      </nav>
-
-      {/* Hero Section */}
-      <section className="landing-hero">
-        <div className="landing-orb"></div>
-        <div style={{position:'relative',zIndex:1}}>
-          <div className="landing-badge" style={{opacity:0,animation:'fadeUp 0.6s ease 0.1s forwards'}}>
-            ✨ Современная платформа для образовательных центров
-          </div>
-          <h1 className="landing-h1" style={{opacity:0,animation:'fadeUp 0.6s ease 0.2s forwards'}}>
-            Управляйте вашим центром <span className="landing-gradient">легко и эффективно</span>
-          </h1>
-          <p className="landing-desc" style={{opacity:0,animation:'fadeUp 0.6s ease 0.3s forwards'}}>
-            BilimHub — комплексное решение для автоматизации образовательных центров. Журнал оценок, расписание, задания и многое другое в одной платформе.
-          </p>
-          <div className="landing-cta-group" style={{opacity:0,animation:'fadeUp 0.6s ease 0.4s forwards'}}>
-            <button className="landing-cta-btn landing-cta-primary" onClick={onGetStarted}>
-              Начать бесплатно →
-            </button>
-            <button className="landing-cta-btn landing-cta-secondary" onClick={()=>alert('Демо: используйте учетные данные на странице входа')}>
-              Посмотреть демо
-            </button>
-          </div>
-          <div className="landing-preview" style={{opacity:0,animation:'fadeUp 0.8s ease 0.5s forwards'}}>
-            <div style={{padding:'40px',background:'linear-gradient(135deg,hsl(160,50%,40%),hsl(180,45%,45%))',color:'#fff',textAlign:'center',fontSize:'18px',fontWeight:600}}>
-              📊 Интерфейс панели управления
-            </div>
-          </div>
-          <div className="landing-stats" style={{opacity:0,animation:'fadeUp 0.8s ease 0.7s forwards'}}>
-            <div className="landing-stat">
-              <div className="landing-stat-value">99.9%</div>
-              <div className="landing-stat-label">Uptime</div>
-            </div>
-            <div className="landing-stat">
-              <div className="landing-stat-value">50+</div>
-              <div className="landing-stat-label">Центров</div>
-            </div>
-            <div className="landing-stat">
-              <div className="landing-stat-value">10K+</div>
-              <div className="landing-stat-label">Учеников</div>
-            </div>
-            <div className="landing-stat">
-              <div className="landing-stat-value">24/7</div>
-              <div className="landing-stat-label">Поддержка</div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Features Section */}
-      <section className="landing-features" id="features">
-        <div className="animate-on-scroll">
-          <h2 className="landing-section-title">Все необходимое в одном месте</h2>
-          <p className="landing-section-desc">
-            Мощные инструменты для управления учебным процессом, построенные для современных образовательных центров.
-          </p>
-        </div>
-        <div className="landing-features-grid">
-          {[
-            { icon: '📚', title: 'Журнал оценок', desc: 'Полный контроль успеваемости. Оценки, комментарии, аналитика по каждому ученику.' },
-            { icon: '🗓', title: 'Расписание', desc: 'Автоматическое расписание занятий с уведомлениями для учителей и учеников.' },
-            { icon: '📋', title: 'Задания и тесты', desc: 'Создавайте задания, принимайте работы онлайн, проверяйте и оценивайте.' },
-            { icon: '👥', title: 'Управление пользователями', desc: 'Роли и права доступа: администраторы, учителя, ученики, родители.' },
-            { icon: '✅', title: 'Посещаемость', desc: 'Отслеживайте посещаемость занятий. Автоматические отчеты и уведомления.' },
-            { icon: '📊', title: 'Аналитика и отчёты', desc: 'Детальные отчеты по успеваемости, посещаемости и активности центра.' },
-          ].map((f, i) => (
-            <div key={i} className="landing-feature-card animate-on-scroll" style={{animationDelay:`${0.8+i*0.08}s`}}>
-              <div className="landing-feature-icon">{f.icon}</div>
-              <h3 className="landing-feature-title">{f.title}</h3>
-              <p className="landing-feature-desc">{f.desc}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* CTA Section */}
-      <section className="landing-cta-section animate-on-scroll" id="benefits">
-        <h2>Готовы начать?</h2>
-        <p>Присоединяйтесь к сотням образовательных центров, которые уже используют BilimHub</p>
-        <button className="landing-cta-btn" onClick={onGetStarted}>
-          Создать аккаунт →
-        </button>
-      </section>
-
-      {/* Footer */}
-      <footer className="landing-footer">
-        <div className="landing-footer-logo">BilimHub</div>
-        <div className="landing-footer-text">© 2026 BilimHub. SaaS Platform for Educational Centers.</div>
-      </footer>
-
-      <style>{`
-        @keyframes fadeDown {
-          from { opacity: 0; transform: translateY(-10px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes fadeUp {
-          from { opacity: 0; transform: translateY(20px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
-    </div>
-  );
-}
 
 // ── AUTH SCREENS ───────────────────────────────────────────────────────────────
 function AuthPage({ onLogin, onBack }) {
-  const [mode, setMode] = useState('login'); // login | register
+  const [mode, setMode] = useState('login'); // login | register | forgot
   const [form, setForm] = useState({ name:'', username:'', email:'', password:'', inviteToken:'' });
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
   const [tokenInfo, setTokenInfo] = useState(null);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotStatus, setForgotStatus] = useState(null); // null | 'sent' | 'error'
 
   const set = k => e => setForm(p=>({...p,[k]:e.target.value}));
 
   async function checkToken(token) {
     if (token.length < 10) return;
     try {
-      const info = await fetch(API_BASE + `/api/tokens/validate/${token.toUpperCase()}`).then(r=>r.json());
+      const info = await fetch(API_BASE + `/api/v1/tokens/validate/${token.toUpperCase()}`).then(r=>r.json());
       if (info.error) setTokenInfo({ error: info.error });
       else setTokenInfo(info);
     } catch { setTokenInfo(null); }
+  }
+
+  async function submitForgot(e) {
+    e.preventDefault(); setLoading(true); setForgotStatus(null);
+    try {
+      await fetch(API_BASE + '/api/v1/auth/forgot-password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotEmail }),
+      });
+      setForgotStatus('sent');
+    } catch { setForgotStatus('error'); }
+    setLoading(false);
   }
 
   async function submit(e) {
@@ -565,6 +438,48 @@ function AuthPage({ onLogin, onBack }) {
       onLogin(API.getUser());
     } catch(ex) { setErr(ex.message); }
     setLoading(false);
+  }
+
+  // ── Forgot password screen ────────────────────────────────────────────────
+  if (mode === 'forgot') {
+    return (
+      <div className="auth-bg">
+        <div className="auth-card">
+          <div className="auth-logo">
+            <div className="auth-logo-icon">B</div>
+            <div>
+              <div className="auth-logo-text">BilimHub</div>
+              <div className="auth-logo-sub">Восстановление пароля</div>
+            </div>
+          </div>
+          {forgotStatus === 'sent' ? (
+            <div style={{textAlign:'center',padding:'24px 0'}}>
+              <div style={{fontSize:40,marginBottom:12}}>📬</div>
+              <div style={{fontWeight:700,fontSize:15,marginBottom:8}}>Ссылка отправлена!</div>
+              <div style={{fontSize:13,color:'var(--muted)',marginBottom:20}}>Если аккаунт с этим email существует, администратор получит ссылку для сброса пароля.</div>
+              <button className="btn btn-s" style={{width:'100%',justifyContent:'center'}} onClick={()=>{setMode('login');setForgotStatus(null);setForgotEmail('');}}>
+                ← Назад ко входу
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={submitForgot}>
+              <div style={{fontSize:13,color:'var(--muted)',marginBottom:16}}>Введите email вашего аккаунта. Если он найден, администратор отправит вам ссылку для сброса пароля.</div>
+              {forgotStatus === 'error' && <div className="err-box">Ошибка. Попробуйте позже.</div>}
+              <div className="fg">
+                <label className="fl">Email</label>
+                <input className="fi" type="email" value={forgotEmail} onChange={e=>setForgotEmail(e.target.value)} placeholder="ivan@example.com" required />
+              </div>
+              <button className="btn btn-p" style={{width:'100%',justifyContent:'center',padding:'10px',marginTop:6}} disabled={loading}>
+                {loading ? '...' : 'Отправить ссылку'}
+              </button>
+              <button type="button" className="btn btn-s" style={{width:'100%',justifyContent:'center',marginTop:8}} onClick={()=>{setMode('login');setForgotStatus(null);}}>
+                ← Назад
+              </button>
+            </form>
+          )}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -618,7 +533,9 @@ function AuthPage({ onLogin, onBack }) {
             <label className="fl">Пароль</label>
             <input className="fi" type="password" value={form.password} onChange={set('password')} placeholder="Минимум 8 символов" required minLength={8} />
             {mode==='login' && <div style={{textAlign:'right',marginTop:4}}>
-              <span style={{fontSize:11,color:'var(--accent)',cursor:'pointer'}} onClick={()=>alert('Обратитесь к администратору вашего центра для сброса пароля.\n\nКонтакт: admin@ваш-центр.kz')}>Забыли пароль?</span>
+              <span style={{fontSize:11,color:'var(--accent)',cursor:'pointer'}} onClick={()=>{setMode('forgot');setErr('');}}>
+                Забыли пароль?
+              </span>
             </div>}
           </div>
           <button className="btn btn-p" style={{width:'100%',justifyContent:'center',padding:'10px',fontSize:14,marginTop:6}} disabled={loading}>
@@ -627,8 +544,8 @@ function AuthPage({ onLogin, onBack }) {
         </form>
         <div style={{textAlign:'center',marginTop:16,fontSize:12,color:'var(--muted)'}}>
           {mode==='login'
-            ? <span>Нет аккаунта? <span style={{color:'var(--accent)',cursor:'pointer',fontWeight:600}} onClick={()=>{setMode('register');setErr('')}}>Регистрация</span></span>
-            : <span>Уже есть аккаунт? <span style={{color:'var(--accent)',cursor:'pointer',fontWeight:600}} onClick={()=>{setMode('login');setErr('')}}>Войти</span></span>
+            ? <span>Нет аккаунта? <span style={{color:'var(--accent)',cursor:'pointer',fontWeight:600}} onClick={()=>{setMode('register');setErr('');}}>Регистрация</span></span>
+            : <span>Уже есть аккаунт? <span style={{color:'var(--accent)',cursor:'pointer',fontWeight:600}} onClick={()=>{setMode('login');setErr('');}}>Войти</span></span>
           }
         </div>
       </div>
@@ -692,7 +609,7 @@ const NAV = {
 
 // ·· SUPER ADMIN DASHBOARD
 function SuperDash() {
-  const { data, loading } = useApi(() => API.get('/api/centers'));
+  const { data, loading } = useApi(() => API.get('/api/v1/centers'));
   const isMobile = useIsMobile();
   if (loading) return <Spinner/>;
   const totalStudents = data?.reduce((s,c)=>s+(c.student_count||0),0)||0;
@@ -747,7 +664,7 @@ function SuperDash() {
 
 // ·· SUPER ADMIN — CENTERS MANAGEMENT
 function CentersView() {
-  const { data: centers, loading, reload } = useApi(() => API.get('/api/centers'));
+  const { data: centers, loading, reload } = useApi(() => API.get('/api/v1/centers'));
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ name:'', plan:'basic' });
   const [err, setErr] = useState('');
@@ -771,7 +688,7 @@ function CentersView() {
   async function create(e) {
     e.preventDefault(); setErr(''); setSaving(true);
     try {
-      const created = await API.post('/api/centers', form);
+      const created = await API.post('/api/v1/centers', form);
       reload(); setShowCreate(false); setForm({name:'',plan:'basic'});
       // After creating, prompt to create first admin
       setNewCenter(created);
@@ -780,14 +697,14 @@ function CentersView() {
   }
 
   async function toggleActive(c) {
-    try { await API.patch(`/api/centers/${c.id}`, { is_active: c.is_active ? 0 : 1 }); reload(); }
+    try { await API.patch(`/api/v1/centers/${c.id}`, { is_active: c.is_active ? 0 : 1 }); reload(); }
     catch(ex) { alert(ex.message); }
   }
 
   async function saveEdit(e) {
     e.preventDefault(); setEditErr('');
     try {
-      await API.patch(`/api/centers/${editId}`, editForm);
+      await API.patch(`/api/v1/centers/${editId}`, editForm);
       reload(); setEditId(null);
     } catch(ex) { setEditErr(ex.message); }
   }
@@ -795,7 +712,7 @@ function CentersView() {
   async function createInvite(e) {
     e.preventDefault(); setInviteErr(''); setInviteLoading(true);
     try {
-      const result = await API.post(`/api/tokens?centerId=${inviteCenter.id}`, {
+      const result = await API.post(`/api/v1/tokens?centerId=${inviteCenter.id}`, {
         role: inviteRole,
         label: inviteLabel || `${roleLabel[inviteRole]} для ${inviteCenter.name}`,
         expiresInDays: 0,
@@ -1025,7 +942,7 @@ function CentersView() {
 
 // ·· CENTER ADMIN DASHBOARD
 function CenterDash({ user, center }) {
-  const { data: stats, loading } = useApi(() => API.get(`/api/centers/stats?centerId=${user.centerId}`));
+  const { data: stats, loading } = useApi(() => API.get(`/api/v1/centers/stats?centerId=${user.centerId}`));
   if (loading) return <Spinner/>;
   return (
     <div className="fade">
@@ -1065,8 +982,8 @@ function CenterDash({ user, center }) {
 
 // ·· TEACHER DASHBOARD
 function TeacherDash({ user }) {
-  const { data: classes, loading } = useApi(() => API.get('/api/classes'));
-  const { data: assignments } = useApi(() => API.get('/api/assignments'));
+  const { data: classes, loading } = useApi(() => API.get('/api/v1/classes'));
+  const { data: assignments } = useApi(() => API.get('/api/v1/assignments'));
   if (loading) return <Spinner/>;
   return (
     <div className="fade">
@@ -1092,8 +1009,8 @@ function TeacherDash({ user }) {
 
 // ·· STUDENT DASHBOARD
 function StudentDash({ user }) {
-  const { data: grades, loading } = useApi(() => API.get(`/api/grades/student/${user.id}`));
-  const { data: assignments } = useApi(() => API.get('/api/assignments'));
+  const { data: grades, loading } = useApi(() => API.get(`/api/v1/grades/student/${user.id}`));
+  const { data: assignments } = useApi(() => API.get('/api/v1/assignments'));
   if (loading) return <Spinner/>;
   const pending = (assignments||[]).filter(a=>!a.submission_id && new Date(a.due_date)>=new Date());
   const overdue = (assignments||[]).filter(a=>!a.submission_id && new Date(a.due_date)<new Date());
@@ -1135,10 +1052,10 @@ function StudentDash({ user }) {
 
 // ·· PARENT DASHBOARD
 function ParentDash({ user }) {
-  const { data: children } = useApi(() => API.get('/api/users/me/children'));
+  const { data: children } = useApi(() => API.get('/api/v1/users/me/children'));
   const [childId, setChildId] = useState(null);
   const effectiveChildId = childId || children?.[0]?.id;
-  const { data: grades } = useApi(() => effectiveChildId ? API.get(`/api/grades/student/${effectiveChildId}`) : Promise.resolve([]), [effectiveChildId]);
+  const { data: grades } = useApi(() => effectiveChildId ? API.get(`/api/v1/grades/student/${effectiveChildId}`) : Promise.resolve([]), [effectiveChildId]);
   const child = children?.find(c=>c.id===effectiveChildId);
   const avgPct = grades?.filter(g=>g.pct!==null).length ? Math.round(grades.filter(g=>g.pct!==null).reduce((s,g)=>s+g.pct,0)/grades.filter(g=>g.pct!==null).length) : null;
   return (
@@ -1182,11 +1099,11 @@ function TokensView() {
   const user = API.getUser();
   const confirm = useConfirm();
   const isSuperAdmin = user?.role === 'super_admin';
-  const { data: centers } = useApi(() => isSuperAdmin ? API.get('/api/centers') : Promise.resolve(null));
+  const { data: centers } = useApi(() => isSuperAdmin ? API.get('/api/v1/centers') : Promise.resolve(null));
   const [centerId, setCenterId] = useState(null);
   const effectiveCenterId = isSuperAdmin ? (centerId || centers?.[0]?.id) : null;
-  const tokenUrl = isSuperAdmin && effectiveCenterId ? `/api/tokens?centerId=${effectiveCenterId}` : '/api/tokens';
-  const studentUrl = isSuperAdmin && effectiveCenterId ? `/api/users?role=student&centerId=${effectiveCenterId}` : '/api/users?role=student';
+  const tokenUrl = isSuperAdmin && effectiveCenterId ? `/api/v1/tokens?centerId=${effectiveCenterId}` : '/api/v1/tokens';
+  const studentUrl = isSuperAdmin && effectiveCenterId ? `/api/v1/users?role=student&centerId=${effectiveCenterId}` : '/api/v1/users?role=student';
   const { data: tokens, loading, reload } = useApi(() => {
     if (isSuperAdmin && !effectiveCenterId) return Promise.resolve([]);
     return API.get(tokenUrl);
@@ -1208,7 +1125,7 @@ function TokensView() {
       if (form.linkedStudentId) payload.linkedStudentId = parseInt(form.linkedStudentId);
       else delete payload.linkedStudentId;
       if (isSuperAdmin && effectiveCenterId) payload.centerId = effectiveCenterId;
-      const url = isSuperAdmin && effectiveCenterId ? `/api/tokens?centerId=${effectiveCenterId}` : '/api/tokens';
+      const url = isSuperAdmin && effectiveCenterId ? `/api/v1/tokens?centerId=${effectiveCenterId}` : '/api/v1/tokens';
       await API.post(url, payload);
       reload(); setShowModal(false); setForm({role:'student',label:'',expiresInDays:0,linkedStudentId:''});
     } catch(ex) { setErr(ex.message); }
@@ -1217,7 +1134,7 @@ function TokensView() {
   async function revoke(id) {
     const ok = await confirm('Токен будет отозван и больше не сможет быть использован.', 'Отозвать токен?', { icon: '⚠️', danger: true, confirmText: 'Отозвать' });
     if (!ok) return;
-    try { await API.del(`/api/tokens/${id}`); reload(); } catch(ex) { alert(ex.message); }
+    try { await API.del(`/api/v1/tokens/${id}`); reload(); } catch(ex) { alert(ex.message); }
   }
 
   function copy(token, id) {
@@ -1313,7 +1230,7 @@ function TokensView() {
 // ·· ATTENDANCE VIEW (teacher / center_admin)
 function AttendanceTeacherView({ user }) {
   const isTeacher = user.role === 'teacher';
-  const { data: classes } = useApi(() => API.get('/api/classes'));
+  const { data: classes } = useApi(() => API.get('/api/v1/classes'));
   const [classId, setClassId] = useState(null);
   const effectiveCls = classId || classes?.[0]?.id;
 
@@ -1331,7 +1248,7 @@ function AttendanceTeacherView({ user }) {
   const to = monthDates[monthDates.length - 1];
 
   const { data, loading, reload } = useApi(() =>
-    effectiveCls ? API.get(`/api/attendance/${effectiveCls}?from=${from}&to=${to}`) : Promise.resolve(null),
+    effectiveCls ? API.get(`/api/v1/attendance/${effectiveCls}?from=${from}&to=${to}`) : Promise.resolve(null),
     [effectiveCls, from, to]
   );
 
@@ -1359,7 +1276,7 @@ function AttendanceTeacherView({ user }) {
     const key = `${studentId}-${date}`;
     setSaving(p => ({ ...p, [key]: true }));
     try {
-      await API.patch(`/api/attendance/${effectiveCls}/${studentId}/${date}`, { status: nextStatus });
+      await API.patch(`/api/v1/attendance/${effectiveCls}/${studentId}/${date}`, { status: nextStatus });
       reload();
     } catch (ex) { console.error(ex); }
     setSaving(p => ({ ...p, [key]: false }));
@@ -1370,7 +1287,7 @@ function AttendanceTeacherView({ user }) {
     setSaving(p => ({ ...p, [`day-${date}`]: true }));
     try {
       const records = data.summary.map(s => ({ studentId: s.id, status }));
-      await API.post(`/api/attendance/${effectiveCls}`, { date, records });
+      await API.post(`/api/v1/attendance/${effectiveCls}`, { date, records });
       reload();
     } catch (ex) { console.error(ex); }
     setSaving(p => ({ ...p, [`day-${date}`]: false }));
@@ -1378,7 +1295,7 @@ function AttendanceTeacherView({ user }) {
 
   function exportCsv() {
     if (!effectiveCls) return;
-    window.open(`/api/attendance/${effectiveCls}/export?token=${API.getToken()}`, '_blank');
+    window.open(`/api/v1/attendance/${effectiveCls}/export?token=${API.getToken()}`, '_blank');
   }
 
   function prevMonth() {
@@ -1550,10 +1467,10 @@ function AttendanceView({ user }) {
 }
 
 function AttendancePersonalView({ user }) {
-  const { data: children } = useApi(() => user.role==='parent' ? API.get('/api/users/me/children') : Promise.resolve(null));
+  const { data: children } = useApi(() => user.role==='parent' ? API.get('/api/v1/users/me/children') : Promise.resolve(null));
   const [childId, setChildId] = useState(null);
   const targetId = user.role==='parent' ? (childId||children?.[0]?.id) : user.id;
-  const { data, loading } = useApi(() => targetId ? API.get(`/api/attendance/my/${targetId}`) : Promise.resolve(null), [targetId]);
+  const { data, loading } = useApi(() => targetId ? API.get(`/api/v1/attendance/my/${targetId}`) : Promise.resolve(null), [targetId]);
 
   const sCol = { present:'#10b981', absent:'#ef4444', late:'#f59e0b', excused:'#6b7280' };
   const sIco  = { present:'✓', absent:'✗', late:'⏱', excused:'E' };
@@ -1611,9 +1528,9 @@ function AttendancePersonalView({ user }) {
 // ·· GRADES VIEW (student/parent)
 function GradesView({ user }) {
   const [childId, setChildId] = useState(null);
-  const { data: children } = useApi(() => user.role==='parent' ? API.get('/api/users/me/children') : Promise.resolve(null));
+  const { data: children } = useApi(() => user.role==='parent' ? API.get('/api/v1/users/me/children') : Promise.resolve(null));
   const targetId = user.role==='parent' ? (childId||children?.[0]?.id) : user.id;
-  const { data: grades, loading } = useApi(() => targetId ? API.get(`/api/grades/student/${targetId}`) : Promise.resolve([]), [targetId]);
+  const { data: grades, loading } = useApi(() => targetId ? API.get(`/api/v1/grades/student/${targetId}`) : Promise.resolve([]), [targetId]);
 
   return (
     <div className="fade">
@@ -1669,12 +1586,12 @@ function GradesView({ user }) {
 
 // ·· CLASSES VIEW
 function ClassesView({ user }) {
-  const { data: classes, loading, reload } = useApi(() => API.get('/api/classes'));
+  const { data: classes, loading, reload } = useApi(() => API.get('/api/v1/classes'));
   const { data: teachers } = useApi(() =>
-    ['center_admin','super_admin'].includes(user.role) ? API.get('/api/users?role=teacher') : Promise.resolve([])
+    ['center_admin','super_admin'].includes(user.role) ? API.get('/api/v1/users?role=teacher') : Promise.resolve([])
   );
   const { data: students } = useApi(() =>
-    ['center_admin','super_admin','teacher'].includes(user.role) ? API.get('/api/users?role=student') : Promise.resolve([])
+    ['center_admin','super_admin','teacher'].includes(user.role) ? API.get('/api/v1/users?role=student') : Promise.resolve([])
   );
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ name:'', subject:'', teacherId:'', color:'#6366f1' });
@@ -1692,7 +1609,7 @@ function ClassesView({ user }) {
   const confirm = useConfirm();
 
   async function loadDetail(id) {
-    try { const d = await API.get(`/api/classes/${id}`); setDetailData(d); setDetail(id); } catch(ex) { alert(ex.message); }
+    try { const d = await API.get(`/api/v1/classes/${id}`); setDetailData(d); setDetail(id); } catch(ex) { alert(ex.message); }
   }
 
   async function create(e) {
@@ -1700,7 +1617,7 @@ function ClassesView({ user }) {
     try {
       const body = { name: form.name, subject: form.subject || undefined, color: form.color };
       if (isAdmin && form.teacherId) body.teacherId = parseInt(form.teacherId);
-      await API.post('/api/classes', body);
+      await API.post('/api/v1/classes', body);
       reload(); setShowCreate(false); setForm({ name:'', subject:'', teacherId:'', color:'#6366f1' });
       toast('Класс создан', 'success');
     } catch(ex) { setErr(ex.message); }
@@ -1711,7 +1628,7 @@ function ClassesView({ user }) {
     try {
       const body = { name: editForm.name, subject: editForm.subject, color: editForm.color };
       if (editForm.teacherId) body.teacherId = parseInt(editForm.teacherId);
-      await API.patch(`/api/classes/${editCls.id}`, body);
+      await API.patch(`/api/v1/classes/${editCls.id}`, body);
       reload(); setEditCls(null); toast('Класс обновлён', 'success');
     } catch(ex) { setEditErr(ex.message); }
   }
@@ -1720,7 +1637,7 @@ function ClassesView({ user }) {
     e.preventDefault();
     if (!enrollIds.length) return;
     try {
-      await API.post(`/api/classes/${detail}/enroll`, { studentIds: enrollIds.map(Number) });
+      await API.post(`/api/v1/classes/${detail}/enroll`, { studentIds: enrollIds.map(Number) });
       loadDetail(detail); setShowEnroll(false); setEnrollIds([]); toast('Ученики записаны', 'success');
     } catch(ex) { alert(ex.message); }
   }
@@ -1728,7 +1645,7 @@ function ClassesView({ user }) {
   async function unenroll(studentId) {
     const ok = await confirm('Ученик будет удалён из этого класса. Его оценки и посещаемость сохранятся.', 'Удалить ученика из класса?', { icon: '👤', danger: true, confirmText: 'Удалить' });
     if (!ok) return;
-    try { await API.del(`/api/classes/${detail}/enroll/${studentId}`); loadDetail(detail); toast('Ученик удалён из класса', 'success'); } catch(ex) { alert(ex.message); }
+    try { await API.del(`/api/v1/classes/${detail}/enroll/${studentId}`); loadDetail(detail); toast('Ученик удалён из класса', 'success'); } catch(ex) { alert(ex.message); }
   }
 
   if (loading) return <Spinner/>;
@@ -2063,7 +1980,7 @@ function SubmitModal({ assignment, onClose, onSuccess }) {
       if (textAnswer.trim()) fd.append('textAnswer', textAnswer.trim());
       if (comment.trim()) fd.append('comment', comment.trim());
       if (file) fd.append('file', file);
-      await API.postForm('/api/submissions', fd);
+      await API.postForm('/api/v1/submissions', fd);
       onSuccess();
     } catch(ex) { setErr(ex.message); }
     setSubmitting(false);
@@ -2149,9 +2066,9 @@ function SubmitModal({ assignment, onClose, onSuccess }) {
 }
 
 function AssignmentsView({ user }) {
-  const { data: classes } = useApi(() => API.get('/api/classes'));
+  const { data: classes } = useApi(() => API.get('/api/v1/classes'));
   const [classFilter, setClassFilter] = useState('');
-  const url = '/api/assignments' + (classFilter ? `?classId=${classFilter}` : '');
+  const url = '/api/v1/assignments' + (classFilter ? `?classId=${classFilter}` : '');
   const { data: assignments, loading, reload } = useApi(() => API.get(url), [url]);
   const canCreate = ['teacher','center_admin','super_admin'].includes(user.role);
   const isTeacher = user.role === 'teacher';
@@ -2168,7 +2085,7 @@ function AssignmentsView({ user }) {
   async function create(e) {
     e.preventDefault(); setErr('');
     try {
-      await API.post('/api/assignments', form);
+      await API.post('/api/v1/assignments', form);
       reload(); setShowCreate(false); setForm({ classId:'', title:'', description:'', type:'homework', gradingScale:'10-point', maxScore:10, dueDate:'', isPublished:1 });
       toast('Задание создано', 'success');
     } catch(ex) { setErr(ex.message); }
@@ -2177,17 +2094,17 @@ function AssignmentsView({ user }) {
   async function deleteAssign(id) {
     const ok = await confirm('Задание и все работы учеников будут удалены безвозвратно. Это действие нельзя отменить.', 'Удалить задание?', { icon: '🗑️', danger: true, confirmText: 'Удалить' });
     if (!ok) return;
-    try { await API.del(`/api/assignments/${id}`); reload(); toast('Задание удалено', 'success'); } catch(ex) { alert(ex.message); }
+    try { await API.del(`/api/v1/assignments/${id}`); reload(); toast('Задание удалено', 'success'); } catch(ex) { alert(ex.message); }
   }
 
   async function viewSubmissions(a) {
     setViewAssign(a);
-    try { const d = await API.get(`/api/submissions/assignment/${a.id}`); setSubs(d); } catch(ex) { alert(ex.message); }
+    try { const d = await API.get(`/api/v1/submissions/assignment/${a.id}`); setSubs(d); } catch(ex) { alert(ex.message); }
   }
 
   async function gradeSubmission(subId, score, feedback) {
     try {
-      await API.patch(`/api/submissions/${subId}/grade`, { score: parseFloat(score), feedback });
+      await API.patch(`/api/v1/submissions/${subId}/grade`, { score: parseFloat(score), feedback });
       viewSubmissions(viewAssign);
       toast('Оценка выставлена', 'success');
       setGradingSubmission(null); // Закрыть модалку
@@ -2204,7 +2121,7 @@ function AssignmentsView({ user }) {
   const [returnFeedbackModal, setReturnFeedbackModal] = useState(null); // submission to return
 
   async function doReturn(subId, feedback) {
-    try { await API.patch(`/api/submissions/${subId}/return`, { feedback }); viewSubmissions(viewAssign); toast('Работа возвращена', 'success'); } catch(ex) { alert(ex.message); }
+    try { await API.patch(`/api/v1/submissions/${subId}/return`, { feedback }); viewSubmissions(viewAssign); toast('Работа возвращена', 'success'); } catch(ex) { alert(ex.message); }
   }
 
   function returnSubmission(sub) {
@@ -2471,7 +2388,7 @@ async function uploadFileToBlobCDN(file) {
   if (!file) throw new Error('Файл не выбран');
 
   // 1. Get client token from our server (small JSON, no payload limit issues)
-  const { clientToken, blobPathname, localMode } = await API.post('/api/hw/upload-token', {
+  const { clientToken, blobPathname, localMode } = await API.post('/api/v1/hw/upload-token', {
     filename: file.name,
     contentType: file.type || 'application/octet-stream',
   });
@@ -2628,10 +2545,10 @@ function HWCreateModal({ classes, editData, onSave, onClose }) {
       };
 
       if (isEdit) {
-        await API.patch(`/api/hw/assignments/${editData.id}`, body);
+        await API.patch(`/api/v1/hw/assignments/${editData.id}`, body);
         toast('Задание обновлено', 'success');
       } else {
-        await API.post('/api/hw/assignments', body);
+        await API.post('/api/v1/hw/assignments', body);
         toast('Задание создано', 'success');
       }
       onSave();
@@ -2738,7 +2655,7 @@ function HWSubmissionsModal({ assignment, onClose, onReload }) {
 
   async function load() {
     setLoading(true);
-    try { setData(await API.get(`/api/hw/assignments/${assignment.id}/submissions`)); } catch (ex) { toast(ex.message, 'error'); }
+    try { setData(await API.get(`/api/v1/hw/assignments/${assignment.id}/submissions`)); } catch (ex) { toast(ex.message, 'error'); }
     setLoading(false);
   }
   useEffect(() => { load(); }, [assignment.id]);
@@ -2751,7 +2668,7 @@ function HWSubmissionsModal({ assignment, onClose, onReload }) {
       setSaving(false); return;
     }
     try {
-      await API.post(`/api/hw/submissions/${sub.id}/grade`, { score, feedback: feedbackInput.trim() || undefined });
+      await API.post(`/api/v1/hw/submissions/${sub.id}/grade`, { score, feedback: feedbackInput.trim() || undefined });
       toast('Оценка сохранена', 'success');
       setGrading(null);
       await load();
@@ -2764,7 +2681,7 @@ function HWSubmissionsModal({ assignment, onClose, onReload }) {
     const fb = window.prompt('Комментарий для ученика (необязательно):') ?? null;
     if (fb === null && !confirm('Вернуть работу без комментария?')) return;
     try {
-      await API.post(`/api/hw/submissions/${sub.id}/return`, { feedback: fb || undefined });
+      await API.post(`/api/v1/hw/submissions/${sub.id}/return`, { feedback: fb || undefined });
       toast('Работа возвращена на доработку', 'info');
       await load();
     } catch (ex) { toast(ex.message, 'error'); }
@@ -2902,7 +2819,7 @@ function HWSubmitModal({ assignment, onClose, onReload }) {
         fileName = result.name;
         setUploading(false);
       }
-      await API.post(`/api/hw/assignments/${assignment.id}/submit`, {
+      await API.post(`/api/v1/hw/assignments/${assignment.id}/submit`, {
         textAnswer: text.trim() || undefined,
         filePath,
         fileName,
@@ -3012,9 +2929,9 @@ function HomeworkModule({ user }) {
   const isTeacher = ['teacher','center_admin','super_admin'].includes(user.role);
   const isStudent = user.role === 'student';
 
-  const { data: classes } = useApi(() => API.get('/api/classes'));
+  const { data: classes } = useApi(() => API.get('/api/v1/classes'));
   const [classFilter, setClassFilter] = useState('');
-  const url = '/api/hw/assignments' + (classFilter ? `?classId=${classFilter}` : '');
+  const url = '/api/v1/hw/assignments' + (classFilter ? `?classId=${classFilter}` : '');
   const { data: assignments, loading, reload } = useApi(() => API.get(url), [url]);
 
   const [showCreate, setShowCreate] = useState(false);
@@ -3031,7 +2948,7 @@ function HomeworkModule({ user }) {
       'Удалить задание?', { danger: true, confirmText: 'Удалить', icon: '🗑️' });
     if (!ok) return;
     try {
-      await API.del(`/api/hw/assignments/${a.id}`);
+      await API.del(`/api/v1/hw/assignments/${a.id}`);
       toast('Задание удалено', 'success');
       reload();
     } catch (ex) { toast(ex.message, 'error'); }
@@ -3189,10 +3106,10 @@ function HomeworkModule({ user }) {
 
 // ·· GRADEBOOK VIEW (teacher / admin)
 function GradebookView({ user }) {
-  const { data: classes, loading: clsLoading } = useApi(() => API.get('/api/classes'));
+  const { data: classes, loading: clsLoading } = useApi(() => API.get('/api/v1/classes'));
   const [selClass, setSelClass] = useState('');
   const classId = selClass || (classes?.[0]?.id);
-  const { data: gb, loading, reload } = useApi(() => classId ? API.get(`/api/grades/class/${classId}`) : Promise.resolve(null), [classId]);
+  const { data: gb, loading, reload } = useApi(() => classId ? API.get(`/api/v1/grades/class/${classId}`) : Promise.resolve(null), [classId]);
   const [editing, setEditing] = useState(null); // {r, c}
   const [editVal, setEditVal] = useState('');
   const [saving, setSaving] = useState(false);
@@ -3211,7 +3128,7 @@ function GradebookView({ user }) {
     }
     setSaving(true);
     try {
-      await API.post('/api/grades/direct', {
+      await API.post('/api/v1/grades/direct', {
         studentId: gb.matrix[r].student.id,
         assignmentId: assignment.id,
         score,
@@ -3234,7 +3151,7 @@ function GradebookView({ user }) {
     <div className="fade">
       <div className="ph" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
         <div style={{minWidth:0,flex:1}}><div className="pt">Журнал оценок</div><div className="ps">Нажмите на ячейку — введите оценку — Enter</div></div>
-        {classId && <a href={`/api/grades/class/${classId}/export`} className="btn btn-s">📥 CSV</a>}
+        {classId && <a href={`/api/v1/grades/class/${classId}/export`} className="btn btn-s">📥 CSV</a>}
       </div>
       <div style={{marginBottom:14,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
         <select className="fi" style={{maxWidth:280}} value={classId||''} onChange={e=>{setSelClass(parseInt(e.target.value));setEditing(null);}}>
@@ -3304,11 +3221,11 @@ function GradebookView({ user }) {
 
 // ·· NOTIFICATIONS PAGE (full page view)
 function NotificationsPage({ onRead }) {
-  const { data, loading, reload } = useApi(() => API.get('/api/notifications'));
+  const { data, loading, reload } = useApi(() => API.get('/api/v1/notifications'));
   const notifs = data?.notifs || [];
-  async function readAll() { await API.patch('/api/notifications/read-all'); reload(); if(onRead) onRead(); }
-  async function del(id) { await API.del(`/api/notifications/${id}`); reload(); if(onRead) onRead(); }
-  async function markRead(id) { await API.patch(`/api/notifications/${id}/read`); reload(); if(onRead) onRead(); }
+  async function readAll() { await API.post('/api/v1/notifications/read-all'); reload(); if(onRead) onRead(); }
+  async function del(id) { await API.del(`/api/v1/notifications/${id}`); reload(); if(onRead) onRead(); }
+  async function markRead(id) { await API.patch(`/api/v1/notifications/${id}/read`); reload(); if(onRead) onRead(); }
 
   return (
     <div className="fade">
@@ -3364,19 +3281,19 @@ function ProfilePage({ user, onLogout, onNameChange }) {
 
   async function saveName(e) {
     e.preventDefault(); setSaving(true);
-    try { await API.patch('/api/users/me', { name }); if(onNameChange) onNameChange(name); toast('Имя обновлено','success'); } catch(ex) { alert(ex.message); }
+    try { await API.patch('/api/v1/users/me', { name }); if(onNameChange) onNameChange(name); toast('Имя обновлено','success'); } catch(ex) { alert(ex.message); }
     setSaving(false);
   }
 
   async function saveEmail(e) {
     e.preventDefault(); setEmailSaving(true);
-    try { await API.patch('/api/users/me', { email }); toast('Email обновлён','success'); } catch(ex) { alert(ex.message); }
+    try { await API.patch('/api/v1/users/me', { email }); toast('Email обновлён','success'); } catch(ex) { alert(ex.message); }
     setEmailSaving(false);
   }
 
   async function changePassword(e) {
     e.preventDefault(); setPwErr(''); setPwOk(false);
-    try { await API.patch('/api/auth/password', pwForm); setPwOk(true); setPwForm({currentPassword:'',newPassword:''}); toast('Пароль изменён','success'); } catch(ex) { setPwErr(ex.message); }
+    try { await API.patch('/api/v1/auth/change-password', pwForm); setPwOk(true); setPwForm({currentPassword:'',newPassword:''}); toast('Пароль изменён','success'); } catch(ex) { setPwErr(ex.message); }
   }
 
   const displayEmoji = avatarEmoji;
@@ -3452,17 +3369,17 @@ function ProfilePage({ user, onLogout, onNameChange }) {
 function UsersView({ user }) {
   const [tab, setTab] = useState('student');
   const isSuperAdmin = user.role === 'super_admin';
-  const { data: centers } = useApi(() => isSuperAdmin ? API.get('/api/centers') : Promise.resolve(null));
+  const { data: centers } = useApi(() => isSuperAdmin ? API.get('/api/v1/centers') : Promise.resolve(null));
   const [centerId, setCenterId] = useState(null);
   const effectiveCenterId = isSuperAdmin ? (centerId || centers?.[0]?.id) : null;
-  const queryStr = isSuperAdmin && effectiveCenterId ? `/api/users?role=${tab}&centerId=${effectiveCenterId}` : `/api/users?role=${tab}`;
+  const queryStr = isSuperAdmin && effectiveCenterId ? `/api/v1/users?role=${tab}&centerId=${effectiveCenterId}` : `/api/v1/users?role=${tab}`;
   const { data: users, loading, reload } = useApi(() => {
     if (isSuperAdmin && !effectiveCenterId) return Promise.resolve([]);
     return API.get(queryStr);
   }, [tab, effectiveCenterId]);
   const { data: students } = useApi(() => {
     if (isSuperAdmin && !effectiveCenterId) return Promise.resolve([]);
-    return API.get(isSuperAdmin ? `/api/users?role=student&centerId=${effectiveCenterId}` : '/api/users?role=student');
+    return API.get(isSuperAdmin ? `/api/v1/users?role=student&centerId=${effectiveCenterId}` : '/api/v1/users?role=student');
   }, [effectiveCenterId]);
   const [linkParent, setLinkParent] = useState(null); // parent user object
   const [linkStudentId, setLinkStudentId] = useState('');
@@ -3477,7 +3394,7 @@ function UsersView({ user }) {
     e.preventDefault(); setResetErr(''); setResetOk(false);
     if (!resetPw || resetPw.length < 8) return setResetErr('Минимум 8 символов');
     try {
-      await API.post(`/api/users/${resetUser.id}/reset-password`, { newPassword: resetPw });
+      await API.post(`/api/v1/users/${resetUser.id}/reset-password`, { newPassword: resetPw });
       setResetOk(true);
     } catch(ex) { setResetErr(ex.message); }
   }
@@ -3485,7 +3402,7 @@ function UsersView({ user }) {
   async function addChild(e) {
     e.preventDefault(); setLinkErr('');
     try {
-      await API.post(`/api/users/${linkParent.id}/children`, { studentId: parseInt(linkStudentId) });
+      await API.post(`/api/v1/users/${linkParent.id}/children`, { studentId: parseInt(linkStudentId) });
       setLinkParent(null); setLinkStudentId('');
     } catch(ex) { setLinkErr(ex.message); }
   }
@@ -3605,18 +3522,18 @@ function UsersView({ user }) {
 }
 
 function NotifPanel({ onClose, onRead }) {
-  const { data: notifData, loading, reload } = useApi(() => API.get('/api/notifications'));
+  const { data: notifData, loading, reload } = useApi(() => API.get('/api/v1/notifications'));
   const notifs = notifData?.notifs || [];
   async function readAll() {
-    await API.patch('/api/notifications/read-all');
+    await API.post('/api/v1/notifications/read-all');
     reload(); if (onRead) onRead();
   }
   function markRead(id) {
-    API.patch(`/api/notifications/${id}/read`).then(()=>{ reload(); if (onRead) onRead(); });
+    API.patch(`/api/v1/notifications/${id}/read`).then(()=>{ reload(); if (onRead) onRead(); });
   }
   function del(id, e) {
     e.stopPropagation();
-    API.del(`/api/notifications/${id}`).then(()=>{ reload(); if (onRead) onRead(); });
+    API.del(`/api/v1/notifications/${id}`).then(()=>{ reload(); if (onRead) onRead(); });
   }
   return (
     <div className="np" onClick={e=>e.stopPropagation()}>
@@ -3644,7 +3561,7 @@ function NotifPanel({ onClose, onRead }) {
 //      lessons          — repeating weekly slot
 //      lesson_teachers  — M:M teachers ↔ lessons
 //      lesson_students  — M:M students ↔ individual lessons
-//    Backend: /api/sched (routes/sched.js)
+//    Backend: /api/v1/sched (routes/sched.js)
 //    Migration: 20250316000000_lessons.js
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -3773,13 +3690,13 @@ function CreateLessonModal({ user, onSave, onClose }) {
   const [err, setErr]       = useState('');
   const toast = useToast();
 
-  const { data: allClasses } = useApi(() => API.get('/api/classes'));
+  const { data: allClasses } = useApi(() => API.get('/api/v1/classes'));
   const { data: allTeachers } = useApi(() =>
     ['center_admin','super_admin'].includes(user.role)
-      ? API.get('/api/users?role=teacher')
+      ? API.get('/api/v1/users?role=teacher')
       : Promise.resolve([])
   );
-  const { data: allStudents } = useApi(() => API.get('/api/users?role=student'));
+  const { data: allStudents } = useApi(() => API.get('/api/v1/users?role=student'));
 
   function setF(k) { return v => setForm(f => ({ ...f, [k]: v })); }
 
@@ -3797,7 +3714,7 @@ function CreateLessonModal({ user, onSave, onClose }) {
     setSaving(true);
     try {
       const parsedClassId = parseInt(form.classId, 10);
-      await API.post('/api/sched', {
+      await API.post('/api/v1/sched', {
         ...form,
         classId:     form.lessonType === 'group' && !isNaN(parsedClassId) ? parsedClassId : null,
         studentIds:  form.lessonType === 'individual' ? form.studentIds : [],
@@ -4019,9 +3936,9 @@ function ScheduleTimeGrid({ lessons, canDelete, onDetail }) {
 
 // ── Admin teacher-list view ───────────────────────────────────────────────────
 function AdminTeacherView({ user }) {
-  const { data: teachers, loading: tLoad } = useApi(() => API.get('/api/sched/teachers'));
+  const { data: teachers, loading: tLoad } = useApi(() => API.get('/api/v1/sched/teachers'));
   const [selTeacher, setSelTeacher] = useState(null);
-  const url = selTeacher ? `/api/sched?teacherId=${selTeacher.id}` : '/api/sched';
+  const url = selTeacher ? `/api/v1/sched?teacherId=${selTeacher.id}` : '/api/v1/sched';
   const { data: lessons, loading: lLoad, reload } = useApi(() => API.get(url), [url]);
   const [detail, setDetail] = useState(null);
   const confirm = useConfirm();
@@ -4031,7 +3948,7 @@ function AdminTeacherView({ user }) {
     const ok = await confirm(`Удалить занятие «${lesson.title}»?`, 'Удалить занятие', { danger: true, confirmText: 'Удалить', icon: '🗑️' });
     if (!ok) return;
     try {
-      await API.del(`/api/sched/${lesson.id}`);
+      await API.del(`/api/v1/sched/${lesson.id}`);
       toast('Занятие удалено', 'success');
       setDetail(null);
       reload();
@@ -4096,7 +4013,7 @@ function AdminTeacherView({ user }) {
 
 // ── Teacher view ──────────────────────────────────────────────────────────────
 function TeacherScheduleView({ user }) {
-  const { data: lessons, loading, reload } = useApi(() => API.get('/api/sched'));
+  const { data: lessons, loading, reload } = useApi(() => API.get('/api/v1/sched'));
   const [showCreate, setShowCreate] = useState(false);
   const [detail, setDetail]         = useState(null);
   const [activeDay, setActiveDay]   = useState(() => {
@@ -4112,7 +4029,7 @@ function TeacherScheduleView({ user }) {
     const ok = await confirm(`Занятие «${lesson.title}» будет удалено.`, 'Удалить занятие?', { danger: true, confirmText: 'Удалить', icon: '🗑️' });
     if (!ok) return;
     try {
-      await API.del(`/api/sched/${lesson.id}`);
+      await API.del(`/api/v1/sched/${lesson.id}`);
       toast('Удалено', 'success');
       setDetail(null);
       reload();
@@ -4178,11 +4095,11 @@ function TeacherScheduleView({ user }) {
 function StudentScheduleView({ user }) {
   const isParent = user.role === 'parent';
   const { data: children } = useApi(() =>
-    isParent ? API.get('/api/users/me/children') : Promise.resolve(null)
+    isParent ? API.get('/api/v1/users/me/children') : Promise.resolve(null)
   );
   const [childId, setChildId] = useState(null);
   const effectiveChild = isParent ? (childId || children?.[0]?.id) : null;
-  const url = isParent && effectiveChild ? `/api/sched?studentId=${effectiveChild}` : '/api/sched';
+  const url = isParent && effectiveChild ? `/api/v1/sched?studentId=${effectiveChild}` : '/api/v1/sched';
   const { data: lessons, loading } = useApi(() => {
     if (isParent && !effectiveChild) return Promise.resolve([]);
     return API.get(url);
@@ -4265,15 +4182,15 @@ function ScheduleModule({ user }) {
 function ScheduleView({ user }) {
   const DAY_NAMES = ['','Пн','Вт','Ср','Чт','Пт','Сб'];
   const DAY_FULL = ['','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота'];
-  const { data: children } = useApi(() => user.role==='parent' ? API.get('/api/users/me/children') : Promise.resolve(null));
+  const { data: children } = useApi(() => user.role==='parent' ? API.get('/api/v1/users/me/children') : Promise.resolve(null));
   const [childId, setChildId] = useState(null);
   const effectiveChildId = user.role==='parent' ? (childId || children?.[0]?.id) : null;
-  const schedUrl = user.role==='parent' && effectiveChildId ? `/api/schedule?studentId=${effectiveChildId}` : '/api/schedule';
+  const schedUrl = user.role==='parent' && effectiveChildId ? `/api/v1/schedule?studentId=${effectiveChildId}` : '/api/v1/schedule';
   const { data, loading, reload } = useApi(() => {
     if (user.role==='parent' && !effectiveChildId) return Promise.resolve({ schedules: [], byDay: {} });
     return API.get(schedUrl);
   }, [schedUrl, effectiveChildId]);
-  const { data: classes } = useApi(() => ['teacher','center_admin','super_admin'].includes(user.role) ? API.get('/api/classes') : Promise.resolve(null));
+  const { data: classes } = useApi(() => ['teacher','center_admin','super_admin'].includes(user.role) ? API.get('/api/v1/classes') : Promise.resolve(null));
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ classId:'', dayOfWeek:1, startTime:'08:30', endTime:'09:15', room:'' });
   const [err, setErr] = useState('');
@@ -4294,7 +4211,7 @@ function ScheduleView({ user }) {
   async function create(e) {
     e.preventDefault(); setErr('');
     try {
-      await API.post('/api/schedule', {...form, classId:parseInt(form.classId), dayOfWeek:parseInt(form.dayOfWeek)});
+      await API.post('/api/v1/schedule', {...form, classId:parseInt(form.classId), dayOfWeek:parseInt(form.dayOfWeek)});
       reload(); setShowCreate(false); toast('Урок добавлен в расписание', 'success');
     } catch(ex) { setErr(ex.message); }
   }
@@ -4302,7 +4219,7 @@ function ScheduleView({ user }) {
   async function deleteEntry(id) {
     const ok = await confirm('Урок будет удалён из расписания. Это не повлияет на посещаемость и оценки.', 'Удалить урок из расписания?', { icon: '🗓️', danger: true, confirmText: 'Удалить' });
     if (!ok) return;
-    try { await API.del(`/api/schedule/${id}`); reload(); toast('Удалено', 'success'); }
+    try { await API.del(`/api/v1/schedule/${id}`); reload(); toast('Удалено', 'success'); }
     catch(ex) { toast(ex.message, 'error'); }
   }
 
@@ -4423,7 +4340,7 @@ function AuditLogView({ user }) {
   const [offset, setOffset] = useState(0);
   const [filter, setFilter] = useState('');
   const LIMIT = 50;
-  const url = `/api/audit?limit=${LIMIT}&offset=${offset}${filter?`&action=${encodeURIComponent(filter)}`:''}`;
+  const url = `/api/v1/audit?limit=${LIMIT}&offset=${offset}${filter?`&action=${encodeURIComponent(filter)}`:''}`;
   const { data, loading } = useApi(() => API.get(url), [url]);
   const logs = data?.logs || [];
 
@@ -4484,7 +4401,7 @@ function AppShell({ user: initialUser, center, onLogout }) {
   const [showNotif, setShowNotif] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const isMobile = useIsMobile();
-  const { data: notifData, reload: reloadNotifs } = useApi(() => API.get('/api/notifications'));
+  const { data: notifData, reload: reloadNotifs } = useApi(() => API.get('/api/v1/notifications'));
   const unread = notifData?.unread ?? 0;
   const confirm = useConfirm();
 
@@ -4625,7 +4542,7 @@ function Root() {
         setUser(data.user); setCenter(data.center || null); setAuthState('auth');
         // If center is missing (restored via refresh), fetch it
         if (!data.center && data.user) {
-          try { const me = await API.get('/api/auth/me'); setCenter(me.center); }
+          try { const me = await API.get('/api/v1/auth/me'); setCenter(me.center); }
           catch {}
         }
       }
@@ -4638,7 +4555,7 @@ function Root() {
   }
 
   if (authState==='unauth') {
-    return <AuthPage onLogin={u => { setUser(u); setAuthState('auth'); API.get('/api/auth/me').then(d=>setCenter(d.center)).catch(()=>{}); }} />;
+    return <AuthPage onLogin={u => { setUser(u); setAuthState('auth'); API.get('/api/v1/auth/me').then(d=>setCenter(d.center)).catch(()=>{}); }} />;
   }
 
   return <AppShell user={user} center={center} onLogout={()=>{ setUser(null); setCenter(null); setAuthState('unauth'); }}/>;
